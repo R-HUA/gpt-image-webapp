@@ -1,4 +1,5 @@
 node_modules/
 dist/
+server-data/
 dev-proxy.config.json
 .wrangler/

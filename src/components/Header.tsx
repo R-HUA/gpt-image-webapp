@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
+import { logout } from '../lib/backend'
+import type { BackendUser } from '../lib/backend'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HelpModal from './HelpModal'
+import AdminPanel from './AdminPanel'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -16,11 +19,12 @@ function isInstalledPwa() {
   return window.matchMedia('(display-mode: standalone)').matches || nav.standalone === true
 }
 
-export default function Header() {
+export default function Header({ user, onLogout, onOpenGallery }: { user: BackendUser | null; onLogout: () => void; onOpenGallery: () => void }) {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
 
@@ -88,17 +92,12 @@ export default function Header() {
   return (
     <>
       <header data-no-drag-select className="safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08]">
-        <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
+        <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex min-w-0 items-center justify-between gap-2">
           <div className="flex-1 min-w-0 pr-2">
             <h1 className="inline-flex items-start relative">
-              <a
-                href="https://github.com/CookSleep/gpt_image_playground"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
+              <span className="block max-w-[13rem] truncate text-[17px] font-bold tracking-tight text-gray-800 dark:text-gray-100 sm:max-w-none sm:text-lg">
                 GPT Image Playground
-              </a>
+              </span>
               {hasUpdate && latestRelease && (
                 <a
                   href={latestRelease.url}
@@ -113,7 +112,7 @@ export default function Header() {
               )}
             </h1>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
             {!isPwaInstalled && (
               <div
                 className="relative"
@@ -176,6 +175,28 @@ export default function Header() {
                 操作指南
               </ViewportTooltip>
             </div>
+            <button
+              onClick={onOpenGallery}
+              className="inline-flex rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-900 sm:px-3 sm:py-2 sm:text-sm"
+              aria-label="Gallery"
+            >
+              <svg className="h-5 w-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span className="hidden sm:inline">Gallery</span>
+            </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => setShowAdmin(true)}
+                className="inline-flex rounded-lg p-2 text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-900 sm:px-3 sm:py-2 sm:text-sm"
+                aria-label="管理"
+              >
+                <svg className="h-5 w-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6M5 5h14v14H5z" />
+                </svg>
+                <span className="hidden sm:inline">管理</span>
+              </button>
+            )}
             <div
               className="relative"
               {...settingsTooltip.handlers}
@@ -209,6 +230,20 @@ export default function Header() {
                 设置
               </ViewportTooltip>
             </div>
+            <button
+              onClick={async () => {
+                await logout().catch(() => {})
+                onLogout()
+              }}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-900 sm:px-3 sm:py-2 sm:text-sm"
+              title={user?.username}
+              aria-label="退出"
+            >
+              <svg className="h-5 w-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H9m4 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
+              </svg>
+              <span className="hidden sm:inline">退出</span>
+            </button>
           </div>
         </div>
       </header>
@@ -216,6 +251,7 @@ export default function Header() {
         <div className="safe-header-inner" />
       </div>
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {showAdmin && <AdminPanel user={user} onClose={() => setShowAdmin(false)} />}
     </>
   )
 }

@@ -1,0 +1,32 @@
+# ---- Build stage ----
+FROM node:20-bookworm-slim AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ---- Runtime stage ----
+FROM node:20-bookworm-slim AS runtime
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV GIP_HOST=0.0.0.0
+ENV GIP_PORT=4173
+ENV GIP_DATA_DIR=/data
+ENV GIP_OUTPUT_DIR=/data/output
+ENV GIP_THUMBNAIL_DIR=/data/thumbnails
+ENV GIP_BATCH_UPLOAD_DIR=/data/batch-uploads
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=build /app/dist ./dist
+COPY server ./server
+
+EXPOSE 4173
+
+CMD ["node", "server/server.js"]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Image Playground Backend"
+  short_description: "Use this project's backend image API."
+  default_prompt: "Use the GPT Image Playground backend skill to submit an image generation job through the configured backend API key."

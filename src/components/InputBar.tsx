@@ -273,6 +273,10 @@ export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const setPrompt = useStore((s) => s.setPrompt)
   const inputImages = useStore((s) => s.inputImages)
+  const batchMode = useStore((s) => s.batchMode)
+  const setBatchMode = useStore((s) => s.setBatchMode)
+  const batchCount = useStore((s) => s.batchCount)
+  const setBatchCount = useStore((s) => s.setBatchCount)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
@@ -461,7 +465,7 @@ export default function InputBar() {
       ? settings
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
-  const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
+  const hasSubmitApiConfig = true
   const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
@@ -487,7 +491,7 @@ export default function InputBar() {
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
       ]
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
+  const atImageLimit = !batchMode && inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
     : null
@@ -819,7 +823,8 @@ export default function InputBar() {
   const handleFiles = async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      const isBatch = useStore.getState().batchMode
+      if (!isBatch && currentCount >= API_MAX_IMAGES) {
         useStore.getState().showToast(
           `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
           'error',
@@ -827,7 +832,7 @@ export default function InputBar() {
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = isBatch ? Number.POSITIVE_INFINITY : API_MAX_IMAGES - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -1839,7 +1844,32 @@ export default function InputBar() {
           <div className="mt-3">
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-6')}
+                  <div className="flex flex-col gap-2 flex-1">
+                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <button
+                        type="button"
+                        onClick={() => setBatchMode(!batchMode)}
+                        className={`rounded-lg px-3 py-1.5 transition ${batchMode ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-white/[0.06]'}`}
+                      >
+                        批量模式
+                      </button>
+                      {batchMode && inputImages.length === 0 && (
+                        <label className="flex items-center gap-1">
+                          <span>批量数</span>
+                          <input
+                            value={batchCount}
+                            onChange={(e) => setBatchCount(Number(e.target.value))}
+                            type="number"
+                            min={1}
+                            max={200}
+                            className="w-20 rounded-lg border border-gray-200/60 bg-white/50 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
+                          />
+                        </label>
+                      )}
+                      {batchMode && inputImages.length > 0 && <span>{inputImages.length} 张图片将拆成 {inputImages.length} 笔请求</span>}
+                    </div>
+                    {renderParams('grid-cols-6')}
+                  </div>
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
                 <div
@@ -1890,6 +1920,25 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                 <div className="collapse-inner">
+                  <div className="mb-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    <button
+                      type="button"
+                      onClick={() => setBatchMode(!batchMode)}
+                      className={`rounded-lg px-3 py-1.5 transition ${batchMode ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-white/[0.06]'}`}
+                    >
+                      批量模式
+                    </button>
+                    {batchMode && inputImages.length === 0 && (
+                      <input
+                        value={batchCount}
+                        onChange={(e) => setBatchCount(Number(e.target.value))}
+                        type="number"
+                        min={1}
+                        max={200}
+                        className="w-20 rounded-lg border border-gray-200/60 bg-white/50 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
+                      />
+                    )}
+                  </div>
                   {renderParams('grid-cols-2')}
                   <div className="h-2" />
                 </div>

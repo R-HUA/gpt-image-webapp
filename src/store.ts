@@ -10,7 +10,7 @@ import type {
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -30,8 +30,7 @@ import {
   clearImages,
   storeImage,
 } from './lib/db'
-import { callImageApi } from './lib/api'
-import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { cancelBackendJob, createBackendJob, getBackendJob } from './lib/backend'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -359,6 +358,10 @@ interface AppState {
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
+  batchMode: boolean
+  setBatchMode: (v: boolean) => void
+  batchCount: number
+  setBatchCount: (v: number) => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -380,7 +383,7 @@ interface AppState {
   // 搜索和筛选
   searchQuery: string
   setSearchQuery: (q: string) => void
-  filterStatus: 'all' | 'running' | 'done' | 'error'
+  filterStatus: 'all' | 'queued' | 'running' | 'done' | 'error' | 'cancelled'
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
@@ -533,6 +536,10 @@ export const useStore = create<AppState>()(
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, images),
           }
         }),
+      batchMode: false,
+      setBatchMode: (batchMode) => set({ batchMode }),
+      batchCount: 1,
+      setBatchCount: (batchCount) => set({ batchCount: Math.max(1, Math.min(200, Math.floor(batchCount) || 1)) }),
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
         set((s) => {
@@ -1092,7 +1099,7 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog, batchMode, batchCount } =
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
@@ -1119,12 +1126,6 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       activeProfile = reusedProfile
       requestSettings = createSettingsForApiProfile(normalizedSettings, reusedProfile)
     }
-  }
-
-  if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
-    useStore.getState().setShowSettings(true)
-    return
   }
 
   if (!prompt.trim()) {
@@ -1188,11 +1189,14 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     maskTargetImageId,
     maskImageId,
     outputImages: [],
-    status: 'running',
+    status: 'queued',
     error: null,
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
+    batch: batchMode,
+    batchCount: batchMode && orderedInputImages.length === 0 ? batchCount : undefined,
+    queuePosition: 0,
   }
 
   const latestTasks = useStore.getState().tasks
@@ -1213,34 +1217,8 @@ async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
-  const taskProfile = getTaskApiProfile(settings, task)
-  if (!taskProfile && task.apiProfileId) {
-    updateTaskInStore(taskId, {
-      status: 'error',
-      error: '找不到此任务所使用的 API 配置。',
-      falRecoverable: false,
-      customRecoverable: false,
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
-    })
-    return
-  }
-  const activeProfile = taskProfile ?? getActiveApiProfile(settings)
-  const requestSettings = createSettingsForApiProfile(settings, activeProfile)
-  const taskProvider = task.apiProvider ?? activeProfile.provider
-  let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
-    ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
-    : null
-  let customTaskInfo: { taskId: string } | null = task.customTaskId
-    ? { taskId: task.customTaskId }
-    : null
-
-  if (taskProvider !== 'fal' && !isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0)) {
-    scheduleOpenAIWatchdog(taskId, activeProfile.timeout)
-  }
 
   try {
-    // 获取输入图片 data URLs
     const inputDataUrls: string[] = []
     for (const imgId of task.inputImageIds) {
       const dataUrl = await ensureImageCached(imgId)
@@ -1253,73 +1231,75 @@ async function executeTask(taskId: string) {
       if (!maskDataUrl) throw new Error('遮罩图片已不存在')
     }
 
-    const result = await callImageApi({
-      settings: requestSettings,
+    const created = await createBackendJob({
+      settings,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: task.params,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
-      onFalRequestEnqueued: (request) => {
-        falRequestInfo = request
-        updateTaskInStore(taskId, {
-          falRequestId: request.requestId,
-          falEndpoint: request.endpoint,
-          falRecoverable: false,
-        })
-      },
-      onCustomTaskEnqueued: (request) => {
-        customTaskInfo = request
-        updateTaskInStore(taskId, {
-          customTaskId: request.taskId,
-          customRecoverable: false,
-        })
-      },
+      batch: Boolean(task.batch),
+      batchCount: task.batchCount,
     })
 
-    const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') return
+    const latestAfterCreate = useStore.getState().tasks.find((t) => t.id === taskId)
+    if (!latestAfterCreate || latestAfterCreate.status === 'cancelled') {
+      await cancelBackendJob(created.job.id).catch(() => {})
+      return
+    }
 
-    // 存储输出图片
+    updateTaskInStore(taskId, {
+      backendJobId: created.job.id,
+      status: created.job.status === 'queued' ? 'queued' : 'running',
+      queuePosition: created.job.queuePosition,
+    })
+
+    let backendJob = created.job
+    while (backendJob.status === 'queued' || backendJob.status === 'running') {
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      const latest = useStore.getState().tasks.find((t) => t.id === taskId)
+      if (!latest || latest.status === 'cancelled') return
+      const polled = await getBackendJob(backendJob.id)
+      backendJob = polled.job
+      updateTaskInStore(taskId, {
+        status: backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : latest.status,
+        queuePosition: backendJob.queuePosition,
+      })
+    }
+
+    if (backendJob.status === 'cancelled') {
+      updateTaskInStore(taskId, {
+        status: 'cancelled',
+        error: backendJob.error || '请求已取消',
+        finishedAt: backendJob.finishedAt ?? Date.now(),
+        elapsed: Date.now() - task.createdAt,
+      })
+      return
+    }
+
+    if (backendJob.status === 'error' || !backendJob.result) {
+      throw new Error(backendJob.error || '后端任务失败')
+    }
+
+    const result = backendJob.result
+
     const outputIds: string[] = []
     for (const dataUrl of result.images) {
       const imgId = await storeImage(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
       outputIds.push(imgId)
     }
-    const isAsyncCustomTask = taskProvider !== 'fal' && taskProvider !== 'openai' && Boolean(customTaskInfo)
-    const actualParamsList = taskProvider === 'fal'
-      ? await resolveImageSizeParamsList(result.images, result.actualParamsList)
-      : isAsyncCustomTask
-      ? await readImageSizeParamsList(result.images)
-      : result.actualParamsList
-    const actualParams = (() => {
-      if (taskProvider === 'fal') return firstActualParams(actualParamsList)
-      if (isAsyncCustomTask) return firstActualParams(actualParamsList)
-      return { ...result.actualParams, n: outputIds.length }
-    })()
-    const shouldStoreRevisedPrompts = taskProvider !== 'fal' && !isAsyncCustomTask
+    const actualParamsList = result.actualParamsList
+    const actualParams = { ...result.actualParams, n: outputIds.length }
+    const shouldStoreRevisedPrompts = true
     const actualParamsByImage = mapActualParamsByImage(outputIds, actualParamsList)
     const revisedPromptByImage = shouldStoreRevisedPrompts ? result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
       const imgId = outputIds[index]
       if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
       return acc
     }, {}) : undefined
-    const promptWasRevised = shouldStoreRevisedPrompts && result.revisedPrompts?.some(
-      (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== task.prompt.trim(),
-    )
-    const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
-    if (taskProvider === 'openai' && !activeProfile.codexCli) {
-      if (promptWasRevised) {
-        showCodexCliPrompt()
-      } else if (!hasRevisedPromptValue) {
-        showCodexCliPrompt(false, '接口没有返回官方 API 会返回的部分信息')
-      }
-    }
 
-    // 更新任务
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') return
-    clearOpenAIWatchdogTimer(taskId)
+    if (!latestBeforeUpdate || (latestBeforeUpdate.status !== 'running' && latestBeforeUpdate.status !== 'queued')) return
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
@@ -1327,10 +1307,11 @@ async function executeTask(taskId: string) {
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
       status: 'done',
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
+      finishedAt: backendJob.finishedAt ?? Date.now(),
+      elapsed: (backendJob.finishedAt ?? Date.now()) - task.createdAt,
       falRecoverable: false,
       customRecoverable: false,
+      queuePosition: 0,
     })
 
     useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
@@ -1344,51 +1325,18 @@ async function executeTask(taskId: string) {
       useStore.getState().clearMaskDraft()
     }
   } catch (err) {
-    clearOpenAIWatchdogTimer(taskId)
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
-    if (latestTask.status !== 'running') return
-    const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
-      ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
-      : null)
-    const latestCustomTaskInfo = customTaskInfo ?? (latestTask.customTaskId ? { taskId: latestTask.customTaskId } : null)
-    if (latestTask.apiProvider === 'fal' && latestFalRequestInfo && isFalConnectionRecoverableError(err)) {
-      updateTaskInStore(taskId, {
-        status: 'error',
-        error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
-        falRequestId: latestFalRequestInfo.requestId,
-        falEndpoint: latestFalRequestInfo.endpoint,
-        falRecoverable: true,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
-      })
-      scheduleFalRecovery(taskId)
-    } else if (latestCustomTaskInfo && isFalConnectionRecoverableError(err)) {
-      updateTaskInStore(taskId, {
-        status: 'error',
-        error: '与自定义异步任务的连接已断开，之后会继续查询任务结果。',
-        customTaskId: latestCustomTaskInfo.taskId,
-        customRecoverable: true,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
-      })
-      scheduleCustomRecovery(taskId)
-    } else {
-      let errorMessage = err instanceof Error ? err.message : String(err)
-      const networkErrorHint = getApiRequestNetworkErrorHint(err, latestTask, useStore.getState().settings)
-      if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
-        errorMessage += `\n${networkErrorHint}`
-      }
-      updateTaskInStore(taskId, {
-        status: 'error',
-        error: errorMessage,
-        ...getRawErrorPayload(err),
-        falRecoverable: false,
-        customRecoverable: false,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
-      })
-      useStore.getState().setDetailTaskId(taskId)
-    }
+    if (latestTask.status !== 'running' && latestTask.status !== 'queued') return
+    updateTaskInStore(taskId, {
+      status: 'error',
+      error: err instanceof Error ? err.message : String(err),
+      ...getRawErrorPayload(err),
+      falRecoverable: false,
+      customRecoverable: false,
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+    })
+    useStore.getState().setDetailTaskId(taskId)
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
     for (const imgId of task.inputImageIds) {
@@ -1406,6 +1354,22 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
   if (task) putTask(task)
+}
+
+export async function cancelQueuedTask(task: TaskRecord) {
+  if (task.status !== 'queued') return
+  try {
+    if (task.backendJobId) await cancelBackendJob(task.backendJobId)
+    updateTaskInStore(task.id, {
+      status: 'cancelled',
+      error: '请求已取消',
+      finishedAt: Date.now(),
+      elapsed: Date.now() - task.createdAt,
+      queuePosition: 0,
+    })
+  } catch (err) {
+    useStore.getState().showToast(err instanceof Error ? err.message : String(err), 'error')
+  }
 }
 
 /** 重试失败的任务：创建新任务并执行 */

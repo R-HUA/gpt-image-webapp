@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask, cancelQueuedTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -66,7 +66,7 @@ export default function DetailModal() {
   }, [detailTaskId])
 
   useEffect(() => {
-    if (task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
+    if (task?.status !== 'queued' && task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => window.clearInterval(id)
@@ -202,7 +202,7 @@ export default function DetailModal() {
   }
 
   const formatDuration = () => {
-    if (task.status === 'running' || isFalReconnecting || isCustomReconnecting) {
+    if (task.status === 'queued' || task.status === 'running' || isFalReconnecting || isCustomReconnecting) {
       const seconds = Math.max(0, Math.floor((now - task.createdAt) / 1000))
       const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
       const ss = String(seconds % 60).padStart(2, '0')
@@ -400,7 +400,7 @@ export default function DetailModal() {
               )}
             </>
           )}
-          {(task.status === 'running' || isFalReconnecting) && (
+          {(task.status === 'queued' || task.status === 'running' || isFalReconnecting) && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -408,11 +408,21 @@ export default function DetailModal() {
                 </svg>
                 {formatDuration()}
               </div>
-              {task.status === 'running' && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+              {(task.status === 'queued' || task.status === 'running') && (
+                <div className="flex flex-col items-center gap-3">
+                  <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <div className="text-sm text-gray-400">
+                    {task.status === 'queued' ? `排队中${task.queuePosition ? ` #${task.queuePosition}` : ''}` : '生成中...'}
+                  </div>
+                  {task.status === 'queued' && (
+                    <button onClick={() => cancelQueuedTask(task)} className="rounded-full bg-red-500 px-4 py-1.5 text-sm text-white">
+                      取消排队
+                    </button>
+                  )}
+                </div>
               )}
             </>
           )}

@@ -124,7 +124,7 @@ export interface MaskDraft {
 
 // ===== 任务记录 =====
 
-export type TaskStatus = 'running' | 'done' | 'error'
+export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
 export interface TaskRecord {
   id: string
@@ -148,6 +148,13 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /** 后端队列任务 ID */
+  backendJobId?: string
+  /** 后端队列位置 */
+  queuePosition?: number
+  /** 批量任务标记 */
+  batch?: boolean
+  batchCount?: number
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

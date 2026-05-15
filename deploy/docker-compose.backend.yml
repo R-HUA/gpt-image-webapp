@@ -1,0 +1,20 @@
+services:
+  gpt-image-playground:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: gpt-image-playground
+    restart: unless-stopped
+    ports:
+      - "4173:4173"
+    environment:
+      GIP_HOST: 0.0.0.0
+      GIP_PORT: 4173
+      GIP_DATA_DIR: /data
+      GIP_OUTPUT_DIR: /data/output
+      GIP_THUMBNAIL_DIR: /data/thumbnails
+      GIP_BATCH_UPLOAD_DIR: /data/batch-uploads
+    volumes:
+      - ./server-data:/data
+      # Optional: mount a host folder for admin "server image path" batch editing.
+      # - /absolute/host/input-images:/input-images:ro
