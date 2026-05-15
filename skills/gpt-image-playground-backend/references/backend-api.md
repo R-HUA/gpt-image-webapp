@@ -32,9 +32,12 @@ Body:
   },
   "inputImageDataUrls": [],
   "batch": false,
-  "batchCount": 1
+  "batchCount": 1,
+  "serverImagePath": ""
 }
 ```
+
+`serverImagePath` is administrator-only. The backend rejects it for normal users and also rejects paths that do not match the server image path saved in Settings > Admin.
 
 Poll:
 

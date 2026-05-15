@@ -85,6 +85,7 @@ export interface AppSettings {
   enterSubmit: boolean
   profiles: ApiProfile[]
   activeProfileId: string
+  adminServerImagePath?: string
 }
 
 // ===== 任务参数 =====
@@ -157,6 +158,7 @@ export interface TaskRecord {
   batchCount?: number
   batchIndex?: number
   batchTotal?: number
+  serverImagePath?: string
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

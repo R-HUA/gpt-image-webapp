@@ -50,11 +50,44 @@ vi.mock('./lib/db', () => {
     },
   }
 })
+const backendJobs: any[] = []
+vi.mock('./lib/backend', () => ({
+  createBackendJob: vi.fn(async (request) => {
+    backendJobs.push(request)
+    return {
+      job: {
+        id: `backend-job-${backendJobs.length}`,
+        status: 'done',
+        queuePosition: 0,
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        error: null,
+        result: {
+          images: [],
+          actualParams: { n: 0 },
+          actualParamsList: [],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          records: [],
+        },
+      },
+    }
+  }),
+  getBackendJob: vi.fn(),
+  cancelBackendJob: vi.fn(),
+}))
 import { clearImages, putImage } from './lib/db'
 import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
+
+async function flushAsyncTasks() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -76,10 +109,14 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(() => {
+    backendJobs.length = 0
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       prompt: 'prompt',
       inputImages: [],
+      batchMode: false,
+      batchCount: 1,
+      serverImageBatchMode: false,
       maskDraft: null,
       maskEditorImageId: null,
       params: { ...DEFAULT_PARAMS },
@@ -124,6 +161,42 @@ describe('mask draft lifecycle in store actions', () => {
     await submitTask()
 
     expect(useStore.getState().maskDraft).toBeNull()
+  })
+
+  it('splits uploaded batch images into separate frontend tasks and backend jobs', async () => {
+    await putImage(imageA)
+    await putImage(imageB)
+    useStore.setState({
+      batchMode: true,
+      inputImages: [imageA, imageB],
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((item) => item.inputImageIds)).toEqual([[imageA.id], [imageB.id]])
+    expect(state.tasks.map((item) => [item.batchIndex, item.batchTotal])).toEqual([[1, 2], [2, 2]])
+    expect(backendJobs).toHaveLength(2)
+    expect(backendJobs.map((job) => job.inputImageDataUrls.length)).toEqual([1, 1])
+  })
+
+  it('passes the configured server image path for admin server-directory jobs', async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, adminServerImagePath: '/input-images' },
+      serverImageBatchMode: true,
+      batchMode: true,
+      inputImages: [],
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    expect(useStore.getState().tasks).toHaveLength(1)
+    expect(useStore.getState().tasks[0].serverImagePath).toBe('/input-images')
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0].serverImagePath).toBe('/input-images')
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {

@@ -3,40 +3,61 @@ import {
   createApiKey,
   createUser,
   deleteApiKey,
+  deleteBatchUpload,
   deleteUser,
   getAdminSettings,
   listAuditLogs,
   listApiKeys,
+  listBatchUploads,
   listUsers,
   updateAdminSettings,
   updateUser,
 } from '../lib/backend'
 import type { BackendUser } from '../lib/backend'
+import { useStore } from '../store'
 
 export default function AdminPanel({ user }: { user: BackendUser | null }) {
   const [users, setUsers] = useState<any[]>([])
   const [keys, setKeys] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
+  const [uploads, setUploads] = useState<any[]>([])
   const [logPage, setLogPage] = useState({ page: 1, totalPages: 1, total: 0 })
+  const [uploadPage, setUploadPage] = useState({ page: 1, totalPages: 1, total: 0 })
   const [settings, setSettings] = useState<any>(null)
-  const [newUser, setNewUser] = useState({ username: '', password: '' })
+  const [newUser, setNewUser] = useState({ username: '', displayName: '', password: '' })
+  const [editingUsers, setEditingUsers] = useState<Record<string, { displayName: string; password: string }>>({})
   const [newKey, setNewKey] = useState('')
   const [error, setError] = useState('')
   const [createdToken, setCreatedToken] = useState('')
 
   const refresh = async () => {
     if (user?.role !== 'admin') return
-    const [userRes, settingsRes, keysRes, logRes] = await Promise.all([listUsers(), getAdminSettings(), listApiKeys(), listAuditLogs({ page: logPage.page, pageSize: 30 })])
+    const [userRes, settingsRes, keysRes, logRes, uploadRes] = await Promise.all([
+      listUsers(),
+      getAdminSettings(),
+      listApiKeys(),
+      listAuditLogs({ page: logPage.page, pageSize: 30 }),
+      listBatchUploads({ page: uploadPage.page, pageSize: 20 }),
+    ])
     setUsers(userRes.users)
     setSettings(settingsRes.settings)
     setKeys(keysRes.keys)
     setLogs(logRes.logs)
+    setUploads(uploadRes.uploads)
     setLogPage({ page: logRes.page, totalPages: logRes.totalPages, total: logRes.total })
+    setUploadPage({ page: uploadRes.page, totalPages: uploadRes.totalPages, total: uploadRes.total })
+    setEditingUsers((prev) => {
+      const next = { ...prev }
+      for (const item of userRes.users) {
+        if (!next[item.username]) next[item.username] = { displayName: item.displayName || item.username, password: '' }
+      }
+      return next
+    })
   }
 
   useEffect(() => {
     refresh().catch((err) => setError(err instanceof Error ? err.message : String(err)))
-  }, [user?.role, logPage.page])
+  }, [user?.role, logPage.page, uploadPage.page])
 
   if (user?.role !== 'admin') return null
 
@@ -45,6 +66,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
     try {
       const res = await updateAdminSettings(settings)
       setSettings(res.settings)
+      useStore.getState().setSettings({ adminServerImagePath: res.settings?.serverImagePath || '' })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -57,13 +79,14 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
       <section className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
           <h3 className="mb-3 text-sm font-bold">用户</h3>
-          <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem]">
+          <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem]">
             <input value={newUser.username} onChange={(e) => setNewUser({ ...newUser, username: e.target.value })} placeholder="用户名" className="min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+            <input value={newUser.displayName} onChange={(e) => setNewUser({ ...newUser, displayName: e.target.value })} placeholder="显示名" className="min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
             <input value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} placeholder="密码" className="min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
             <button
               onClick={async () => {
-                await createUser({ username: newUser.username, password: newUser.password || '123456' })
-                setNewUser({ username: '', password: '' })
+                await createUser({ username: newUser.username, displayName: newUser.displayName || newUser.username, password: newUser.password || '123456' })
+                setNewUser({ username: '', displayName: '', password: '' })
                 await refresh()
               }}
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white"
@@ -77,9 +100,34 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
           </div>
           <div className="space-y-2">
             {users.map((item) => (
-              <div key={item.username} className="flex min-w-0 items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-white/[0.03]">
-                <span className="min-w-0 truncate font-medium">{item.username}</span>
-                <span className="shrink-0 text-xs text-gray-400">{item.disabled ? '已禁用' : '正常'}</span>
+              <div key={item.username} className="grid min-w-0 grid-cols-1 gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-white/[0.03] lg:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 truncate font-medium">{item.username}</span>
+                  <span className="shrink-0 text-xs text-gray-400">{item.disabled ? '已禁用' : '正常'}</span>
+                </div>
+                <input
+                  value={editingUsers[item.username]?.displayName ?? item.displayName ?? item.username}
+                  onChange={(e) => setEditingUsers((prev) => ({ ...prev, [item.username]: { displayName: e.target.value, password: prev[item.username]?.password || '' } }))}
+                  placeholder="显示名"
+                  className="min-w-0 rounded-md border px-2 py-1.5 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
+                />
+                <input
+                  value={editingUsers[item.username]?.password || ''}
+                  onChange={(e) => setEditingUsers((prev) => ({ ...prev, [item.username]: { displayName: prev[item.username]?.displayName ?? item.displayName ?? item.username, password: e.target.value } }))}
+                  placeholder="新密码（留空不改）"
+                  className="min-w-0 rounded-md border px-2 py-1.5 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
+                />
+                <div className="flex items-center justify-end gap-1">
+                  <button onClick={async () => {
+                    const draft = editingUsers[item.username] || { displayName: item.displayName, password: '' }
+                    await updateUser(item.username, { displayName: draft.displayName, ...(draft.password ? { password: draft.password } : {}) })
+                    setEditingUsers((prev) => ({ ...prev, [item.username]: { displayName: draft.displayName, password: '' } }))
+                    await refresh()
+                  }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title="保存用户" aria-label="保存用户">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </button>
                 <button onClick={async () => { await updateUser(item.username, { disabled: !item.disabled }); await refresh() }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title={item.disabled ? '启用' : '禁用'} aria-label={item.disabled ? '启用' : '禁用'}>
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     {item.disabled ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 015.636 5.636m12.728 12.728A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />}
@@ -90,6 +138,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
                   </svg>
                 </button>
+                </div>
               </div>
             ))}
           </div>
@@ -143,6 +192,46 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               </button>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="mt-4 rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold">批量上传原图</h3>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">仅保存批量上传模式中的本地输入图；删除后不影响已生成结果。</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <span>{uploadPage.total} 条</span>
+            <button disabled={uploadPage.page <= 1} onClick={() => setUploadPage((v) => ({ ...v, page: Math.max(1, v.page - 1) }))} className="inline-flex h-8 w-8 items-center justify-center rounded border disabled:opacity-40 dark:border-white/[0.08]" title="上一页" aria-label="上一页">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <button disabled={uploadPage.page >= uploadPage.totalPages} onClick={() => setUploadPage((v) => ({ ...v, page: v.page + 1 }))} className="inline-flex h-8 w-8 items-center justify-center rounded border disabled:opacity-40 dark:border-white/[0.08]" title="下一页" aria-label="下一页">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {uploads.map((upload) => (
+            <div key={upload.id} className="grid min-w-0 grid-cols-1 gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03] md:grid-cols-[minmax(0,1fr)_8rem_7rem_auto]">
+              <div className="min-w-0">
+                <div className="truncate font-medium">{upload.fileName}</div>
+                <div className="truncate text-gray-400">{upload.username} / {upload.jobId}</div>
+              </div>
+              <span className="text-gray-500">{new Date(upload.createdAt).toLocaleString()}</span>
+              <span className="text-gray-500">{upload.size ? `${Math.round(upload.size / 1024)} KB` : '-'}</span>
+              <button onClick={async () => { await deleteBatchUpload(upload.id); await refresh() }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除原图" aria-label="删除原图">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
+                </svg>
+              </button>
+            </div>
+          ))}
+          {uploads.length === 0 && <div className="text-sm text-gray-400">暂无批量上传原图</div>}
         </div>
       </section>
 

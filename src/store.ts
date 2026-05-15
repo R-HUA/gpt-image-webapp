@@ -362,6 +362,8 @@ interface AppState {
   setBatchMode: (v: boolean) => void
   batchCount: number
   setBatchCount: (v: number) => void
+  serverImageBatchMode: boolean
+  setServerImageBatchMode: (v: boolean) => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -540,6 +542,8 @@ export const useStore = create<AppState>()(
       setBatchMode: (batchMode) => set({ batchMode }),
       batchCount: 1,
       setBatchCount: (batchCount) => set({ batchCount: Math.max(1, Math.min(200, Math.floor(batchCount) || 1)) }),
+      serverImageBatchMode: false,
+      setServerImageBatchMode: (serverImageBatchMode) => set({ serverImageBatchMode }),
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
         set((s) => {
@@ -1099,7 +1103,7 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog, batchMode, batchCount } =
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog, batchMode, batchCount, serverImageBatchMode } =
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
@@ -1134,6 +1138,15 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
   if (batchMode && maskDraft) {
     showToast('批量模式暂不支持遮罩编辑，请关闭批量模式或移除遮罩后再提交', 'error')
+    return
+  }
+  const serverImagePath = serverImageBatchMode ? String((settings as any).adminServerImagePath || '').trim() : ''
+  if (serverImageBatchMode && !serverImagePath) {
+    showToast('管理员尚未配置服务器图片目录', 'error')
+    return
+  }
+  if (serverImageBatchMode && inputImages.length > 0) {
+    showToast('服务器目录批量模式会使用服务器目录图片，请先移除本地参考图', 'error')
     return
   }
 
@@ -1180,7 +1193,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskInputGroups = batchMode
+  const taskInputGroups = serverImageBatchMode
+    ? [[] as InputImage[]]
+    : batchMode
     ? orderedInputImages.length > 0
       ? orderedInputImages.map((img) => [img])
       : Array.from({ length: batchCount }, () => [] as InputImage[])
@@ -1206,8 +1221,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     elapsed: null,
     batch: batchMode,
     batchCount: batchMode && orderedInputImages.length === 0 ? 1 : undefined,
-    batchIndex: batchMode ? index + 1 : undefined,
-    batchTotal: batchMode ? batchTotal : undefined,
+    batchIndex: batchMode || serverImageBatchMode ? index + 1 : undefined,
+    batchTotal: batchMode || serverImageBatchMode ? batchTotal : undefined,
+    serverImagePath: serverImageBatchMode ? serverImagePath : undefined,
     queuePosition: 0,
   }))
 
@@ -1251,6 +1267,7 @@ async function executeTask(taskId: string) {
       maskDataUrl,
       batch: Boolean(task.batch),
       batchCount: task.batch ? 1 : undefined,
+      serverImagePath: task.serverImagePath,
     })
 
     const latestAfterCreate = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1411,6 +1428,7 @@ export async function retryTask(task: TaskRecord) {
     batchCount: task.batchCount,
     batchIndex: task.batchIndex,
     batchTotal: task.batchTotal,
+    serverImagePath: task.serverImagePath,
     queuePosition: 0,
   }
 

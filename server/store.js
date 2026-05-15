@@ -18,6 +18,7 @@ const EMPTY_DB = {
     },
   },
   results: [],
+  batchUploads: [],
   auditLogs: [],
 }
 
@@ -54,6 +55,7 @@ export class JsonStore {
       users: Array.isArray(data?.users) ? data.users : [],
       apiKeys: Array.isArray(data?.apiKeys) ? data.apiKeys : [],
       results: Array.isArray(data?.results) ? data.results : [],
+      batchUploads: Array.isArray(data?.batchUploads) ? data.batchUploads : [],
       auditLogs: Array.isArray(data?.auditLogs) ? data.auditLogs : [],
     }
   }

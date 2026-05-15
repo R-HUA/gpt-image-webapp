@@ -101,6 +101,7 @@ export function createBackendJob(request: {
   maskDataUrl?: string
   batch?: boolean
   batchCount?: number
+  serverImagePath?: string
 }) {
   return api<{ job: BackendJob }>('/api/jobs', {
     method: 'POST',
@@ -173,4 +174,29 @@ export function listAuditLogs(params?: { page?: number; pageSize?: number }) {
   if (params?.page) query.set('page', String(params.page))
   if (params?.pageSize) query.set('pageSize', String(params.pageSize))
   return api<{ logs: AuditLogRecord[]; page: number; pageSize: number; total: number; totalPages: number }>(`/api/admin/audit-logs${query.size ? `?${query}` : ''}`)
+}
+
+export interface BackendBatchUploadRecord {
+  id: string
+  jobId: string
+  username: string
+  inputIndex: number
+  fileName: string
+  mime?: string
+  size?: number
+  createdAt: number
+  deleted?: boolean
+  deletedAt?: number
+}
+
+export function listBatchUploads(params?: { owner?: string; page?: number; pageSize?: number }) {
+  const query = new URLSearchParams()
+  if (params?.owner) query.set('owner', params.owner)
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.pageSize) query.set('pageSize', String(params.pageSize))
+  return api<{ uploads: BackendBatchUploadRecord[]; page: number; pageSize: number; total: number; totalPages: number }>(`/api/admin/batch-uploads${query.size ? `?${query}` : ''}`)
+}
+
+export function deleteBatchUpload(id: string) {
+  return api<{ upload: BackendBatchUploadRecord }>(`/api/admin/batch-uploads/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
-import { getSession } from './lib/backend'
+import { getAdminSettings, getSession } from './lib/backend'
 import type { BackendUser } from './lib/backend'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigrationNotice'
@@ -29,7 +29,16 @@ export default function App() {
 
   const refreshSession = () => {
     getSession()
-      .then((res) => setUser(res.user))
+      .then((res) => {
+        setUser(res.user)
+        if (res.user?.role === 'admin') {
+          getAdminSettings()
+            .then((settingsRes) => setSettings({ adminServerImagePath: settingsRes.settings?.serverImagePath || '' }))
+            .catch(() => {})
+        } else {
+          setSettings({ adminServerImagePath: '' })
+        }
+      })
       .catch(() => setUser(null))
       .finally(() => setSessionLoaded(true))
   }
@@ -99,7 +108,7 @@ export default function App() {
           <TaskGrid />
         </div>
       </main>
-      <InputBar />
+      <InputBar user={user} />
       <DetailModal />
       <Lightbox />
       <SettingsModal user={user} />

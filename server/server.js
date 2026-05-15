@@ -175,8 +175,11 @@ function requireAdmin(req, res) {
 }
 
 async function bootstrapAdmin() {
-  store.data.adminPasswordHash = hashPassword(serverConfig.admin.password, 'admin-fixed-salt')
-  await store.save()
+  if (!store.data.adminPasswordHash) {
+    store.data.adminPasswordHash = hashPassword(serverConfig.admin.password, 'admin-fixed-salt')
+    await store.save()
+    log('info', 'admin.bootstrap_password.initialized', { username: serverConfig.admin.username })
+  }
 }
 
 function publicUser(user) {
@@ -229,8 +232,22 @@ async function persistBatchUploads(job, inputImages) {
   const dir = path.resolve(rootDir, serverConfig.batchUploadDir, safeSegment(job.username))
   for (let i = 0; i < inputImages.length; i++) {
     const basename = `${dateStamp()}_${job.id}_input_${i + 1}`
-    saved.push(await saveDataUrl(inputImages[i], dir, basename))
+    const savedFile = await saveDataUrl(inputImages[i], dir, basename)
+    const record = {
+      id: id('upload'),
+      jobId: job.id,
+      username: job.username,
+      inputIndex: i + 1,
+      filePath: savedFile.filePath,
+      mime: savedFile.mime,
+      size: savedFile.size,
+      createdAt: Date.now(),
+      deleted: false,
+    }
+    store.data.batchUploads.unshift(record)
+    saved.push(record)
   }
+  await store.save()
   log('info', 'job.batch_uploads.persisted', { jobId: job.id, username: job.username, count: saved.length, dir })
   return saved
 }
@@ -247,6 +264,21 @@ async function readImageFileAsDataUrl(filePath) {
   const ext = path.extname(filePath).toLowerCase()
   const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png'
   return bufferToDataUrl(await fs.readFile(filePath), mime)
+}
+
+function publicBatchUpload(record) {
+  return {
+    id: record.id,
+    jobId: record.jobId,
+    username: record.username,
+    inputIndex: record.inputIndex,
+    fileName: path.basename(record.filePath || ''),
+    mime: record.mime,
+    size: record.size,
+    createdAt: record.createdAt,
+    deleted: Boolean(record.deleted),
+    deletedAt: record.deletedAt,
+  }
 }
 
 async function persistResult(job, result) {
@@ -651,10 +683,51 @@ async function handleApi(req, res, url) {
     return sendJson(res, { logs: page.items, page: page.page, pageSize: page.pageSize, total: page.total, totalPages: page.totalPages })
   }
 
+  if (url.pathname === '/api/admin/batch-uploads' && req.method === 'GET') {
+    const admin = requireAdmin(req, res)
+    if (!admin) return
+    const owner = url.searchParams.get('owner')
+    const visibleUploads = store.data.batchUploads.filter((record) => {
+      if (owner && record.username !== owner) return false
+      return !record.deleted
+    })
+    const page = paginate(visibleUploads, url)
+    return sendJson(res, {
+      uploads: page.items.map(publicBatchUpload),
+      page: page.page,
+      pageSize: page.pageSize,
+      total: page.total,
+      totalPages: page.totalPages,
+    })
+  }
+
+  const batchUploadMatch = /^\/api\/admin\/batch-uploads\/([^/]+)$/.exec(url.pathname)
+  if (batchUploadMatch && req.method === 'DELETE') {
+    const admin = requireAdmin(req, res)
+    if (!admin) return
+    const upload = store.data.batchUploads.find((item) => item.id === decodeURIComponent(batchUploadMatch[1]))
+    if (!upload) return sendJson(res, { error: '批量上传原图不存在' }, 404)
+    if (!upload.deleted) {
+      upload.deleted = true
+      upload.deletedAt = Date.now()
+      await fs.unlink(upload.filePath).catch((err) => {
+        if (err?.code !== 'ENOENT') throw err
+      })
+      await store.save()
+    }
+    await addAudit(admin, 'admin.batch_upload.delete', { uploadId: upload.id, owner: upload.username, jobId: upload.jobId }, req)
+    log('info', 'admin.batch_upload.delete', { ...requestLogDetails(req, admin), uploadId: upload.id, owner: upload.username, jobId: upload.jobId })
+    return sendJson(res, { upload: publicBatchUpload(upload) })
+  }
+
   if (url.pathname === '/api/jobs' && req.method === 'POST') {
     const user = requireAuth(req, res)
     if (!user) return
     const body = await readJson(req)
+    if (body.serverImagePath && user.role !== 'admin') return sendJson(res, { error: '服务器图片目录仅管理员可用' }, 403)
+    if (body.serverImagePath && String(body.serverImagePath) !== String(store.data.settings.serverImagePath || '')) {
+      return sendJson(res, { error: '服务器图片目录必须与管理员设置一致' }, 403)
+    }
     const job = {
       id: id('job'),
       username: user.username,
@@ -673,6 +746,7 @@ async function handleApi(req, res, url) {
       batchCount: body.batchCount,
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
       promptLength: String(body.prompt || '').length,
+      serverImagePath: body.serverImagePath ? '[configured]' : '',
     }, req)
     log('info', 'job.create', {
       ...requestLogDetails(req, user),
@@ -681,6 +755,7 @@ async function handleApi(req, res, url) {
       batchCount: body.batchCount,
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
       promptLength: String(body.prompt || '').length,
+      serverImagePath: body.serverImagePath ? '[configured]' : '',
     })
     return sendJson(res, { job: getJobView(job) })
   }

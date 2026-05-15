@@ -12,6 +12,7 @@ import { getSafeBoundingClientRect } from '../lib/domRect'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
+import type { BackendUser } from '../lib/backend'
 
 
 function getMentionTagTextLength(el: Element) {
@@ -269,7 +270,7 @@ function useIsMobile() {
   return isMobile
 }
 
-export default function InputBar() {
+export default function InputBar({ user }: { user: BackendUser | null }) {
   const prompt = useStore((s) => s.prompt)
   const setPrompt = useStore((s) => s.setPrompt)
   const inputImages = useStore((s) => s.inputImages)
@@ -277,6 +278,9 @@ export default function InputBar() {
   const setBatchMode = useStore((s) => s.setBatchMode)
   const batchCount = useStore((s) => s.batchCount)
   const setBatchCount = useStore((s) => s.setBatchCount)
+  const serverImageBatchMode = useStore((s) => s.serverImageBatchMode)
+  const setServerImageBatchMode = useStore((s) => s.setServerImageBatchMode)
+  const adminServerImagePath = useStore((s) => s.settings.adminServerImagePath)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
@@ -467,6 +471,7 @@ export default function InputBar() {
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = true
   const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig)
+  const canUseServerImageBatch = user?.role === 'admin' && Boolean(adminServerImagePath)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
@@ -491,7 +496,8 @@ export default function InputBar() {
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
       ]
-  const atImageLimit = !batchMode && inputImages.length >= API_MAX_IMAGES
+  const atImageLimit = (serverImageBatchMode || !batchMode) && inputImages.length >= API_MAX_IMAGES
+  const attachDisabled = serverImageBatchMode || atImageLimit
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
     : null
@@ -1867,6 +1873,24 @@ export default function InputBar() {
                         </label>
                       )}
                       {batchMode && inputImages.length > 0 && <span>{inputImages.length} 张图片将拆成 {inputImages.length} 笔请求</span>}
+                      {user?.role === 'admin' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!canUseServerImageBatch) {
+                              showToast('请先在设置 > 后端管理中配置服务器图片目录', 'error')
+                              return
+                            }
+                            setServerImageBatchMode(!serverImageBatchMode)
+                            if (!serverImageBatchMode) setBatchMode(true)
+                          }}
+                          className={`rounded-lg px-3 py-1.5 transition ${serverImageBatchMode ? 'bg-emerald-500 text-white' : 'bg-gray-100 dark:bg-white/[0.06]'}`}
+                          title={adminServerImagePath || '未配置服务器图片目录'}
+                        >
+                          服务器目录
+                        </button>
+                      )}
+                      {serverImageBatchMode && <span className="truncate">使用目录：{adminServerImagePath}</span>}
                     </div>
                     {renderParams('grid-cols-6')}
                   </div>
@@ -1877,15 +1901,15 @@ export default function InputBar() {
                   onMouseEnter={() => setAttachHover(true)}
                   onMouseLeave={() => setAttachHover(false)}
                 >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                  <ButtonTooltip visible={attachDisabled && attachHover} text={serverImageBatchMode ? '服务器目录模式不使用本地参考图' : `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
                   <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                    onClick={() => !attachDisabled && fileInputRef.current?.click()}
                     className={`p-2.5 rounded-xl transition-all shadow-sm ${
-                      atImageLimit
+                      attachDisabled
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
                     }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    title={serverImageBatchMode ? '服务器目录模式不使用本地参考图' : atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
@@ -1938,7 +1962,25 @@ export default function InputBar() {
                         className="w-20 rounded-lg border border-gray-200/60 bg-white/50 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
                       />
                     )}
+                    {user?.role === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!canUseServerImageBatch) {
+                            showToast('请先在设置 > 后端管理中配置服务器图片目录', 'error')
+                            return
+                          }
+                          setServerImageBatchMode(!serverImageBatchMode)
+                          if (!serverImageBatchMode) setBatchMode(true)
+                        }}
+                        className={`rounded-lg px-3 py-1.5 transition ${serverImageBatchMode ? 'bg-emerald-500 text-white' : 'bg-gray-100 dark:bg-white/[0.06]'}`}
+                        title={adminServerImagePath || '未配置服务器图片目录'}
+                      >
+                        服务器目录
+                      </button>
+                    )}
                   </div>
+                  {serverImageBatchMode && <div className="mb-2 truncate text-xs text-emerald-600 dark:text-emerald-300">使用目录：{adminServerImagePath}</div>}
                   {renderParams('grid-cols-2')}
                   <div className="h-2" />
                 </div>
@@ -1950,15 +1992,15 @@ export default function InputBar() {
                   onMouseEnter={() => setAttachHover(true)}
                   onMouseLeave={() => setAttachHover(false)}
                 >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                  <ButtonTooltip visible={attachDisabled && attachHover} text={serverImageBatchMode ? '服务器目录模式不使用本地参考图' : `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
                   <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                    onClick={() => !attachDisabled && fileInputRef.current?.click()}
                     className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${
-                      atImageLimit
+                      attachDisabled
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300'
                     }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    title={serverImageBatchMode ? '服务器目录模式不使用本地参考图' : atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
