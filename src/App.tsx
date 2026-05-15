@@ -102,7 +102,7 @@ export default function App() {
       <InputBar />
       <DetailModal />
       <Lightbox />
-      <SettingsModal />
+      <SettingsModal user={user} />
       <ConfirmDialog />
       <SupportPromptModal />
       <Toast />

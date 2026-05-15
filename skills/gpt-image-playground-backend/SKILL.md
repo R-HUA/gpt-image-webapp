@@ -1,11 +1,11 @@
 ---
 name: gpt-image-playground-backend
-description: Use this project as an image generation backend through an administrator-created backend API Key. Trigger when Codex should generate or edit images by calling a deployed GPT Image Playground backend, submit queued jobs to /api/jobs, poll results, save returned images locally, or integrate with the backend gallery rather than using built-in image generation.
+description: Use this project as an image generation backend through an administrator-created backend access token. Trigger when Codex should generate or edit images by calling a deployed GPT Image Playground backend, submit queued jobs to /api/jobs, poll results, save returned images locally, or integrate with the backend gallery rather than using built-in image generation.
 ---
 
 # GPT Image Playground Backend Skill
 
-Use this skill to interact with a deployed GPT Image Playground backend using a Bearer token created by the administrator in the web UI.
+Use this skill to interact with a deployed GPT Image Playground backend using a Bearer backend access token created by the administrator in the web UI. This token authenticates to this project backend and is different from the upstream image provider secret stored in Settings > Admin.
 
 ## Required environment
 
@@ -13,14 +13,14 @@ Require these environment variables:
 
 ```bash
 GIP_BACKEND_URL=http://127.0.0.1:4173
-GIP_BACKEND_API_KEY=<backend api key from admin panel>
+GIP_BACKEND_ACCESS_TOKEN=<backend access token from Settings > Admin>
 ```
 
-Never ask the user to paste the key in chat. Ask them to set `GIP_BACKEND_API_KEY` in their shell or automation environment.
+Never ask the user to paste the token in chat. Ask them to set `GIP_BACKEND_ACCESS_TOKEN` in their shell or automation environment.
 
 ## Workflow
 
-1. Confirm `GIP_BACKEND_URL` and `GIP_BACKEND_API_KEY` are set.
+1. Confirm `GIP_BACKEND_URL` and `GIP_BACKEND_ACCESS_TOKEN` are set.
 2. Decide whether the task is text-to-image or image edit.
 3. Use `scripts/gip_backend_client.mjs` instead of writing one-off HTTP code.
 4. Save outputs under a project-local output directory unless the user specifies another path.
@@ -86,5 +86,5 @@ For edits, explicitly state what must remain unchanged.
 
 - The backend handles queueing, concurrency, server-side output persistence, thumbnails, gallery metadata, and audit logs.
 - Browser-local history is not updated by this skill. Outputs are saved locally by the script and also persisted in the backend gallery.
-- If the backend returns `401`, the API Key is missing, disabled, or wrong.
-- If the backend returns `后端尚未配置 API Key`, the administrator still needs to configure the upstream image provider in the web UI.
+- If the backend returns `401`, the backend access token is missing, disabled, or wrong.
+- If the backend returns `后端尚未配置上游服务商密钥`, the administrator still needs to configure the upstream image provider secret in the web UI.

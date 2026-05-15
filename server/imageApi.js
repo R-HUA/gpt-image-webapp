@@ -204,7 +204,7 @@ async function callImages(profile, request, signal) {
 
 export async function callImageProvider(profile, request, signal) {
   await delay(50 + Math.floor(Math.random() * 300), undefined, { signal })
-  if (!profile.apiKey) throw new Error('后端尚未配置 API Key')
+  if (!profile.apiKey) throw new Error('后端尚未配置上游服务商密钥')
   return profile.apiMode === 'responses'
     ? callResponses(profile, request, signal)
     : callImages(profile, request, signal)

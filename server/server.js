@@ -20,6 +20,37 @@ let activeCount = 0
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 const PAGE_SIZE_MAX = 100
 
+function log(level, event, details = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    ...details,
+  }
+  const line = JSON.stringify(entry)
+  if (level === 'error') console.error(line)
+  else console.log(line)
+}
+
+function logError(event, err, details = {}) {
+  log('error', event, {
+    ...details,
+    errorName: err?.name,
+    errorMessage: err instanceof Error ? err.message : String(err),
+    errorStack: err?.stack,
+  })
+}
+
+function requestLogDetails(req, user = null) {
+  return {
+    method: req.method,
+    path: req.url?.split('?')[0],
+    username: user?.username,
+    role: user?.role,
+    ip: req.socket?.remoteAddress,
+  }
+}
+
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(password, salt, 64).toString('hex')
   return `${salt}:${hash}`
@@ -176,6 +207,7 @@ async function saveDataUrl(dataUrl, dir, basename) {
   await fs.mkdir(dir, { recursive: true })
   const filePath = path.join(dir, `${basename}.${ext}`)
   await fs.writeFile(filePath, buffer)
+  log('info', 'file.saved', { filePath, mime, bytes: buffer.length })
   return { filePath, ext, mime, size: buffer.length }
 }
 
@@ -187,6 +219,7 @@ async function makeThumbnail(sourcePath, targetPath) {
     .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
     .webp({ quality: 78, effort: 4 })
     .toFile(webpPath)
+  log('info', 'thumbnail.created', { sourcePath, thumbnailPath: webpPath })
   return webpPath
 }
 
@@ -198,6 +231,7 @@ async function persistBatchUploads(job, inputImages) {
     const basename = `${dateStamp()}_${job.id}_input_${i + 1}`
     saved.push(await saveDataUrl(inputImages[i], dir, basename))
   }
+  log('info', 'job.batch_uploads.persisted', { jobId: job.id, username: job.username, count: saved.length, dir })
   return saved
 }
 
@@ -249,12 +283,22 @@ async function persistResult(job, result) {
     store.data.results.unshift(record)
   }
   await store.save()
+  log('info', 'job.results.persisted', { jobId: job.id, username: job.username, count: records.length, outputDir, thumbDir })
   return records
 }
 
 function enqueue(job) {
   jobs.set(job.id, job)
   queue.push(job)
+  log('info', 'job.queued', {
+    jobId: job.id,
+    username: job.username,
+    queueLength: queue.length,
+    promptLength: String(job.request.prompt || '').length,
+    inputImageCount: Array.isArray(job.request.inputImageDataUrls) ? job.request.inputImageDataUrls.length : 0,
+    batch: Boolean(job.request.batch),
+    batchCount: job.request.batchCount,
+  })
   pumpQueue()
 }
 
@@ -264,8 +308,16 @@ function pumpQueue() {
     const job = queue.shift()
     if (!job || job.status !== 'queued') continue
     activeCount++
+    log('info', 'job.dequeued', {
+      jobId: job.id,
+      username: job.username,
+      activeCount,
+      concurrency,
+      remainingQueue: queue.length,
+    })
     runJob(job).finally(() => {
       activeCount--
+      log('info', 'job.worker.released', { jobId: job.id, activeCount, remainingQueue: queue.length })
       pumpQueue()
     })
   }
@@ -275,10 +327,22 @@ async function runJob(job) {
   job.status = 'running'
   job.startedAt = Date.now()
   job.abortController = new AbortController()
+  const startedAt = Date.now()
+  log('info', 'job.started', {
+    jobId: job.id,
+    username: job.username,
+    promptLength: String(job.request.prompt || '').length,
+    inputImageCount: Array.isArray(job.request.inputImageDataUrls) ? job.request.inputImageDataUrls.length : 0,
+    hasMask: Boolean(job.request.maskDataUrl),
+    batch: Boolean(job.request.batch),
+    batchCount: job.request.batchCount,
+    serverImagePath: job.request.serverImagePath,
+  })
   try {
     let requests = [job.request]
     if (job.request.serverImagePath) {
       const files = await listServerImages(job.request.serverImagePath)
+      log('info', 'job.server_images.listed', { jobId: job.id, dir: job.request.serverImagePath, count: files.length })
       requests = await Promise.all(files.map(async (filePath) => ({
         ...job.request,
         inputImageDataUrls: [await readImageFileAsDataUrl(filePath)],
@@ -295,13 +359,34 @@ async function runJob(job) {
     }
 
     if (job.request.batch) await persistBatchUploads(job, job.request.inputImageDataUrls || [])
+    log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length })
 
     const allImages = []
     const actualParamsList = []
     const revisedPrompts = []
     const rawImageUrls = []
-    for (const request of requests) {
+    for (let i = 0; i < requests.length; i++) {
+      const request = requests[i]
+      const requestStartedAt = Date.now()
+      log('info', 'provider.request.started', {
+        jobId: job.id,
+        requestIndex: i + 1,
+        requestCount: requests.length,
+        provider: store.data.settings.activeProfile.provider,
+        model: store.data.settings.activeProfile.model,
+        apiMode: store.data.settings.activeProfile.apiMode,
+        inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
+        hasMask: Boolean(request.maskDataUrl),
+        sourceServerPath: request.sourceServerPath,
+      })
       const result = await callImageProvider(store.data.settings.activeProfile, request, job.abortController.signal)
+      log('info', 'provider.request.done', {
+        jobId: job.id,
+        requestIndex: i + 1,
+        durationMs: Date.now() - requestStartedAt,
+        imageCount: result.images.length,
+        rawImageUrlCount: result.rawImageUrls?.length || 0,
+      })
       allImages.push(...result.images)
       actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
       revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
@@ -326,10 +411,23 @@ async function runJob(job) {
         thumbnailUrl: record.thumbnailUrl,
       })),
     }
+    log('info', 'job.done', {
+      jobId: job.id,
+      username: job.username,
+      durationMs: job.finishedAt - startedAt,
+      imageCount: allImages.length,
+      resultCount: records.length,
+    })
   } catch (err) {
     job.status = job.status === 'cancelled' ? 'cancelled' : 'error'
     job.error = err?.name === 'AbortError' ? '请求已取消' : err instanceof Error ? err.message : String(err)
     job.finishedAt = Date.now()
+    logError('job.failed', err, {
+      jobId: job.id,
+      username: job.username,
+      status: job.status,
+      durationMs: job.finishedAt - startedAt,
+    })
   }
 }
 
@@ -340,6 +438,7 @@ function cancelJob(job) {
     job.status = 'cancelled'
     job.finishedAt = Date.now()
     job.error = '请求已取消'
+    log('info', 'job.cancelled', { jobId: job.id, username: job.username, status: 'queued' })
     return true
   }
   return false
@@ -409,6 +508,7 @@ async function handleApi(req, res, url) {
     const token = crypto.randomBytes(32).toString('hex')
     sessions.set(token, user)
     await addAudit(user, 'auth.login', {}, req)
+    log('info', 'auth.login', requestLogDetails(req, user))
     sendJson(res, { user }, 200, { 'Set-Cookie': `gip_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax` })
     return
   }
@@ -418,6 +518,7 @@ async function handleApi(req, res, url) {
     const token = getCookie(req, 'gip_session')
     if (token) sessions.delete(token)
     await addAudit(user, 'auth.logout', {}, req)
+    log('info', 'auth.logout', requestLogDetails(req, user))
     sendJson(res, { ok: true }, 200, { 'Set-Cookie': 'gip_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax' })
     return
   }
@@ -442,6 +543,7 @@ async function handleApi(req, res, url) {
       store.data.users.push(user)
       await store.save()
       await addAudit(admin, 'admin.user.create', { username }, req)
+      log('info', 'admin.user.create', { ...requestLogDetails(req, admin), targetUsername: username })
       return sendJson(res, { user: publicUser(user) })
     }
   }
@@ -461,12 +563,14 @@ async function handleApi(req, res, url) {
       user.updatedAt = Date.now()
       await store.save()
       await addAudit(admin, 'admin.user.update', { username, changed: Object.keys(body).filter((key) => key !== 'password') }, req)
+      log('info', 'admin.user.update', { ...requestLogDetails(req, admin), targetUsername: username, changed: Object.keys(body).filter((key) => key !== 'password') })
       return sendJson(res, { user: publicUser(user) })
     }
     if (req.method === 'DELETE') {
       store.data.users = store.data.users.filter((item) => item.username !== username)
       await store.save()
       await addAudit(admin, 'admin.user.delete', { username }, req)
+      log('info', 'admin.user.delete', { ...requestLogDetails(req, admin), targetUsername: username })
       return sendJson(res, { ok: true })
     }
   }
@@ -492,6 +596,14 @@ async function handleApi(req, res, url) {
           apiKey: store.data.settings.activeProfile.apiKey ? '[set]' : '',
         },
       }, req)
+      log('info', 'admin.settings.update', {
+        ...requestLogDetails(req, admin),
+        concurrency: store.data.settings.concurrency,
+        serverImagePath: store.data.settings.serverImagePath,
+        provider: store.data.settings.activeProfile.provider,
+        model: store.data.settings.activeProfile.model,
+        hasProviderSecret: Boolean(store.data.settings.activeProfile.apiKey),
+      })
       return sendJson(res, { settings: store.data.settings })
     }
   }
@@ -516,6 +628,7 @@ async function handleApi(req, res, url) {
       store.data.apiKeys.push(key)
       await store.save()
       await addAudit(admin, 'admin.api_key.create', { keyId: key.id, name: key.name, username: key.username, role: key.role }, req)
+      log('info', 'admin.backend_token.create', { ...requestLogDetails(req, admin), tokenId: key.id, name: key.name, username: key.username, role: key.role })
       return sendJson(res, { key })
     }
   }
@@ -527,6 +640,7 @@ async function handleApi(req, res, url) {
     store.data.apiKeys = store.data.apiKeys.filter((key) => key.id !== decodeURIComponent(keyMatch[1]))
     await store.save()
     await addAudit(admin, 'admin.api_key.delete', { keyId: decodeURIComponent(keyMatch[1]) }, req)
+    log('info', 'admin.backend_token.delete', { ...requestLogDetails(req, admin), tokenId: decodeURIComponent(keyMatch[1]) })
     return sendJson(res, { ok: true })
   }
 
@@ -560,6 +674,14 @@ async function handleApi(req, res, url) {
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
       promptLength: String(body.prompt || '').length,
     }, req)
+    log('info', 'job.create', {
+      ...requestLogDetails(req, user),
+      jobId: job.id,
+      batch: Boolean(body.batch),
+      batchCount: body.batchCount,
+      inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
+      promptLength: String(body.prompt || '').length,
+    })
     return sendJson(res, { job: getJobView(job) })
   }
 
@@ -573,6 +695,7 @@ async function handleApi(req, res, url) {
     if (req.method === 'DELETE') {
       if (!cancelJob(job)) return sendJson(res, { error: '只能取消排队中的请求' }, 409)
       await addAudit(user, 'job.cancel', { jobId: job.id }, req)
+      log('info', 'job.cancel', { ...requestLogDetails(req, user), jobId: job.id })
       return sendJson(res, { job: getJobView(job) })
     }
   }
@@ -603,6 +726,7 @@ async function handleApi(req, res, url) {
     record.deletedAt = Date.now()
     await store.save()
     await addAudit(admin, 'gallery.delete', { resultId: record.id, owner: record.username, jobId: record.jobId }, req)
+    log('info', 'gallery.delete', { ...requestLogDetails(req, admin), resultId: record.id, owner: record.username, jobId: record.jobId })
     return sendJson(res, { record })
   }
 
@@ -610,9 +734,15 @@ async function handleApi(req, res, url) {
 }
 
 async function handleRequest(req, res) {
+  const requestStartedAt = Date.now()
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
-    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url)
+    if (url.pathname.startsWith('/api/')) {
+      log('info', 'http.api.started', requestLogDetails(req))
+      await handleApi(req, res, url)
+      log('info', 'http.api.done', { ...requestLogDetails(req), durationMs: Date.now() - requestStartedAt, statusCode: res.statusCode })
+      return
+    }
 
     const requested = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)
     const candidate = path.resolve(distDir, `.${requested}`)
@@ -624,6 +754,7 @@ async function handleRequest(req, res) {
     }
     return sendFile(res, path.join(distDir, 'index.html'))
   } catch (err) {
+    logError('http.request.failed', err, { method: req.method, url: req.url, durationMs: Date.now() - requestStartedAt })
     sendJson(res, { error: err instanceof Error ? err.message : String(err) }, 500)
   }
 }
@@ -633,5 +764,12 @@ await ensureDirs()
 await bootstrapAdmin()
 
 http.createServer(handleRequest).listen(serverConfig.port, serverConfig.host, () => {
-  console.log(`gpt-image-playground server listening on http://${serverConfig.host}:${serverConfig.port}`)
+  log('info', 'server.started', {
+    url: `http://${serverConfig.host}:${serverConfig.port}`,
+    dataDir: path.resolve(rootDir, serverConfig.dataDir),
+    outputDir: path.resolve(rootDir, serverConfig.outputDir),
+    thumbnailDir: path.resolve(rootDir, serverConfig.thumbnailDir),
+    batchUploadDir: path.resolve(rootDir, serverConfig.batchUploadDir),
+    adminUsername: serverConfig.admin.username,
+  })
 })

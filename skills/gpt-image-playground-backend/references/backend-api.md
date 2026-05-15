@@ -2,10 +2,12 @@
 
 Base URL comes from `GIP_BACKEND_URL`.
 
+Use a backend access token created in Settings > Admin. This is not the upstream image provider API key.
+
 Authentication:
 
 ```http
-Authorization: Bearer <GIP_BACKEND_API_KEY>
+Authorization: Bearer <GIP_BACKEND_ACCESS_TOKEN>
 ```
 
 Create job:

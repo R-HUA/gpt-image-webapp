@@ -17,7 +17,7 @@ function usage() {
 
 Environment:
   GIP_BACKEND_URL
-  GIP_BACKEND_API_KEY
+  GIP_BACKEND_ACCESS_TOKEN
 `)
 }
 
@@ -45,9 +45,9 @@ function parseArgs(argv) {
 
 function getEnv() {
   const baseUrl = process.env.GIP_BACKEND_URL?.replace(/\/+$/, '')
-  const apiKey = process.env.GIP_BACKEND_API_KEY
+  const apiKey = process.env.GIP_BACKEND_ACCESS_TOKEN || process.env.GIP_BACKEND_API_KEY
   if (!baseUrl) throw new Error('GIP_BACKEND_URL is not set')
-  if (!apiKey) throw new Error('GIP_BACKEND_API_KEY is not set')
+  if (!apiKey) throw new Error('GIP_BACKEND_ACCESS_TOKEN is not set')
   return { baseUrl, apiKey }
 }
 

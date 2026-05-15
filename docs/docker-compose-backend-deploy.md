@@ -50,7 +50,7 @@ volumes:
 
 `./server-data` 会保存：
 
-- `db.json`：用户、后端 API Key、管理配置、审计日志、图库元数据
+- `db.json`：用户、后端访问令牌、管理配置、审计日志、图库元数据
 - `output/`：按用户名分类保存的生成原图
 - `thumbnails/`：后端压缩生成的 WebP 缩略图
 - `batch-uploads/`：批量上传的输入图片备份
@@ -77,7 +77,7 @@ volumes:
 docker compose -f deploy/docker-compose.backend.yml up -d --build
 ```
 
-查看日志：
+查看日志。后端会输出 JSON 行日志，包含任务入队、开始执行、上游服务商请求、图片落盘、缩略图生成和错误堆栈：
 
 ```bash
 docker compose -f deploy/docker-compose.backend.yml logs -f
@@ -96,26 +96,26 @@ http://<服务器IP>:4173
 密码：admin123456
 ```
 
-首次登录后进入顶部“管理”，至少配置：
+首次登录后打开“设置”，进入“管理员”子菜单，至少配置：
 
-- API Base URL：例如 `https://api.openai.com/v1`
-- API Key：真实图片服务商 Key
+- 上游服务商 Base URL：例如 `https://api.openai.com/v1`
+- 上游服务商密钥：真实图片服务商 Key
 - 模型：例如 `gpt-image-2`
 - 总体并发数：默认 `2`
 - 服务器图片目录：可选，仅管理员批量使用服务器目录图片时需要
 
-## 4. 创建普通用户和后端 API Key
+## 4. 创建普通用户和后端访问令牌
 
-在“管理”界面：
+在“设置 > 管理员”界面：
 
 1. 新增普通用户，普通用户无注册入口。
-2. 在“后端 API Key”区域新增 Key。
+2. 在“后端访问令牌”区域新增令牌。
 3. 复制刚生成的完整 token；它只在创建时完整显示。
 
-这个 Key 用于外部程序或项目内 skill 直接调用后端：
+这个令牌用于外部程序或项目内 skill 直接调用本项目后端，不是上游服务商密钥：
 
 ```http
-Authorization: Bearer <后端 API Key>
+Authorization: Bearer <后端访问令牌>
 ```
 
 ## 5. 更新部署

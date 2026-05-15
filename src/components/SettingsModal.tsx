@@ -30,6 +30,8 @@ import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
 import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
+import AdminPanel from './AdminPanel'
+import type { BackendUser } from '../lib/backend'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -266,7 +268,7 @@ profiles 中不要包含 apiKey（用户导入后自行填写）。
 ## 统一任务接口示例
 {"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}`
 
-export default function SettingsModal() {
+export default function SettingsModal({ user }: { user: BackendUser | null }) {
   const showSettings = useStore((s) => s.showSettings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
@@ -297,7 +299,7 @@ export default function SettingsModal() {
   const [profileImportUrlTooltipVisible, setProfileImportUrlTooltipVisible] = useState(false)
   const [duplicateProfileTooltipVisible, setDuplicateProfileTooltipVisible] = useState(false)
   const [llmPromptTooltipVisible, setLlmPromptTooltipVisible] = useState(false)
-  const [activeTab, setActiveTab] = useState<'general' | 'api' | 'data' | 'about'>('general')
+  const [activeTab, setActiveTab] = useState<'general' | 'api' | 'data' | 'admin' | 'about'>('general')
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
   const [importConfig, setImportConfig] = useState(true)
@@ -1058,6 +1060,15 @@ export default function SettingsModal() {
                 习惯配置
               </button>
               <button
+                onClick={() => setActiveTab('api')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'api' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+                API 配置
+              </button>
+              <button
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'data' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1066,6 +1077,17 @@ export default function SettingsModal() {
                 </svg>
                 数据管理
               </button>
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => setActiveTab('admin')}
+                  className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'admin' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6M5 5h14v14H5z" />
+                  </svg>
+                  后端管理
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('about')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'about' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
@@ -1136,6 +1158,24 @@ export default function SettingsModal() {
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     关闭后，不再持久化提示词和参考图，下次启动会使用空输入框。
+                  </div>
+                </div>
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">复用配置时临时复用该任务的 API 配置</span>
+                    <button
+                      type="button"
+                      onClick={() => commitSettings({ ...draft, reuseTaskApiProfileTemporarily: !draft.reuseTaskApiProfileTemporarily })}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.reuseTaskApiProfileTemporarily ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={draft.reuseTaskApiProfileTemporarily}
+                      aria-label="复用配置时临时复用该任务的 API 配置"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.reuseTaskApiProfileTemporarily ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    开启后，复用历史任务时会临时使用该任务的 API 配置，找不到该配置时提交会提示；关闭后，会继续使用当前的 API 配置。
                   </div>
                 </div>
                 <div className="block">
@@ -1679,12 +1719,16 @@ export default function SettingsModal() {
               </div>
             )}
 
+            {activeTab === 'admin' && user?.role === 'admin' && (
+              <AdminPanel user={user} />
+            )}
+
             {activeTab === 'about' && (
               <div className="flex h-full min-h-[300px] flex-col justify-center px-6 pb-8">
                 <div className="mx-auto max-w-md rounded-2xl border border-gray-200/70 bg-gray-50/70 p-5 dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <h4 className="text-base font-bold text-gray-800 dark:text-gray-100">私有后端模式</h4>
                   <p className="mt-3 text-sm leading-7 text-gray-500 dark:text-gray-400">
-                    当前版本由后端统一代理图片服务商请求，登录用户才能提交生成任务。API Key、并发数、服务器图片目录和后端访问 Key 都在管理员后台维护。
+                    当前版本由后端统一代理图片服务商请求，登录用户才能提交生成任务。上游服务商密钥、并发数、服务器图片目录和后端访问令牌都在设置的管理员子菜单维护。
                   </p>
                   <div className="mt-4 grid gap-2 text-xs text-gray-500 dark:text-gray-400">
                     <div className="rounded-lg bg-white px-3 py-2 dark:bg-white/[0.04]">前端历史：仅保存在当前浏览器</div>

@@ -1132,6 +1132,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     showToast('请输入提示词', 'error')
     return
   }
+  if (batchMode && maskDraft) {
+    showToast('批量模式暂不支持遮罩编辑，请关闭批量模式或移除遮罩后再提交', 'error')
+    return
+  }
 
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
@@ -1176,32 +1180,40 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
+  const taskInputGroups = batchMode
+    ? orderedInputImages.length > 0
+      ? orderedInputImages.map((img) => [img])
+      : Array.from({ length: batchCount }, () => [] as InputImage[])
+    : [orderedInputImages]
+  const batchTotal = taskInputGroups.length
+  const createdAt = Date.now()
+  const tasks = taskInputGroups.map((group, index): TaskRecord => ({
+    id: genId(),
     prompt: prompt.trim(),
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
+    inputImageIds: group.map((i) => i.id),
     maskTargetImageId,
     maskImageId,
     outputImages: [],
     status: 'queued',
     error: null,
-    createdAt: Date.now(),
+    createdAt: createdAt + index,
     finishedAt: null,
     elapsed: null,
     batch: batchMode,
-    batchCount: batchMode && orderedInputImages.length === 0 ? batchCount : undefined,
+    batchCount: batchMode && orderedInputImages.length === 0 ? 1 : undefined,
+    batchIndex: batchMode ? index + 1 : undefined,
+    batchTotal: batchMode ? batchTotal : undefined,
     queuePosition: 0,
-  }
+  }))
 
   const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
+  useStore.getState().setTasks([...tasks, ...latestTasks])
+  await Promise.all(tasks.map((task) => putTask(task)))
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1210,7 +1222,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   useStore.getState().setReusedTaskApiProfile(null)
 
   // 异步调用 API
-  executeTask(taskId)
+  for (const task of tasks) executeTask(task.id)
 }
 
 async function executeTask(taskId: string) {
@@ -1238,7 +1250,7 @@ async function executeTask(taskId: string) {
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
       batch: Boolean(task.batch),
-      batchCount: task.batchCount,
+      batchCount: task.batch ? 1 : undefined,
     })
 
     const latestAfterCreate = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1390,11 +1402,16 @@ export async function retryTask(task: TaskRecord) {
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
     outputImages: [],
-    status: 'running',
+    status: 'queued',
     error: null,
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
+    batch: task.batch,
+    batchCount: task.batchCount,
+    batchIndex: task.batchIndex,
+    batchTotal: task.batchTotal,
+    queuePosition: 0,
   }
 
   const latestTasks = useStore.getState().tasks

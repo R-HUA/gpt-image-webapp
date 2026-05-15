@@ -265,6 +265,11 @@ export default function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+          {task.batch && task.batchIndex && task.batchTotal && (
+            <div className="absolute left-2 top-2 z-10 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur">
+              {task.batchIndex}/{task.batchTotal}
+            </div>
+          )}
           {(task.status === 'queued' || task.status === 'running') && (
             <div className="flex flex-col items-center gap-2">
               <svg
