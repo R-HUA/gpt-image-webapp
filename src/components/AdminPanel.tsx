@@ -179,7 +179,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
                     <input type="checkbox" checked={!!settings.activeProfile.codexCli} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, codexCli: e.target.checked } })} className="rounded border-gray-300 dark:border-white/[0.1] dark:bg-white/[0.03]" />
                     Codex CLI 兼容模式
                   </label>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">开启后跳过 quality 参数、添加 prompt 改写保护前缀，并在 N&gt;1 时拆分为并发单请求。</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">开启后跳过 quality 参数、添加 prompt 改写保护前缀，并在 N&gt;1 时拆分为多个单图请求。</p>
                   <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <input type="checkbox" checked={!!settings.activeProfile.responseFormatB64Json} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, responseFormatB64Json: e.target.checked } })} className="rounded border-gray-300 dark:border-white/[0.1] dark:bg-white/[0.03]" />
                     返回 Base64 图片数据

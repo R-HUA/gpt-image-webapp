@@ -56,6 +56,7 @@ const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const completedBatchToasts = new Set<string>()
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 
 function createOpenAITimeoutError(timeoutSeconds: number) {
@@ -661,6 +662,33 @@ function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+function getBatchSiblings(task: TaskRecord): TaskRecord[] {
+  if (!task.batch || !task.batchId) return []
+  return useStore.getState().tasks.filter((item) => item.batchId === task.batchId)
+}
+
+function maybeShowBatchCompletionToast(task: TaskRecord): boolean {
+  if (!task.batch || !task.batchId || !task.batchTotal || task.batchTotal <= 1) return false
+  const siblings = getBatchSiblings(task)
+  const total = task.batchTotal
+  if (siblings.length < total) return true
+
+  const doneCount = siblings.filter((item) => item.status === 'done').length
+  const errorCount = siblings.filter((item) => item.status === 'error').length
+  const cancelledCount = siblings.filter((item) => item.status === 'cancelled').length
+  const failedCount = errorCount + cancelledCount
+  if (doneCount + failedCount < total) return true
+  if (completedBatchToasts.has(task.batchId)) return true
+  completedBatchToasts.add(task.batchId)
+
+  if (failedCount > 0) {
+    useStore.getState().showToast(`批量任务完成 ${doneCount}/${total}，${failedCount} 个失败或取消`, failedCount === total ? 'error' : 'success')
+  } else {
+    useStore.getState().showToast(`批量任务全部完成 (${total}/${total})`, 'success')
+  }
+  return true
+}
+
 export function getCodexCliPromptKey(settings: AppSettings): string {
   const profile = getActiveApiProfile(settings)
   return `${profile.baseUrl}\n${profile.apiKey}`
@@ -1201,6 +1229,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       : Array.from({ length: batchCount }, () => [] as InputImage[])
     : [orderedInputImages]
   const batchTotal = taskInputGroups.length
+  const batchId = (batchMode || serverImageBatchMode) && batchTotal > 1 ? genId() : undefined
   const createdAt = Date.now()
   const tasks = taskInputGroups.map((group, index): TaskRecord => ({
     id: genId(),
@@ -1220,6 +1249,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     finishedAt: null,
     elapsed: null,
     batch: batchMode,
+    batchId,
     batchCount: batchMode && orderedInputImages.length === 0 ? 1 : undefined,
     batchIndex: batchMode || serverImageBatchMode ? index + 1 : undefined,
     batchTotal: batchMode || serverImageBatchMode ? batchTotal : undefined,
@@ -1342,25 +1372,7 @@ async function executeTask(taskId: string) {
       customRecoverable: false,
       queuePosition: 0,
     })
-    // 批量任务汇总 toast：仅在最后一个子任务完成时弹出
-    if (task.batch && task.batchTotal && task.batchTotal > 1) {
-      const batchTotal = task.batchTotal
-      const allTasks = useStore.getState().tasks
-      const siblings = allTasks.filter(
-        (t) => t.batch && t.batchTotal === batchTotal && Math.abs(t.createdAt - task.createdAt) < batchTotal * 2,
-      )
-      const doneCount = siblings.filter((t) => t.status === 'done').length
-      const errorCount = siblings.filter((t) => t.status === 'error').length
-      const total = siblings.length
-      if (doneCount + errorCount >= total) {
-        if (errorCount > 0) {
-          useStore.getState().showToast(`批量任务完成 ${doneCount}/${total}，${errorCount} 个失败`, errorCount === total ? 'error' : 'success')
-        } else {
-          useStore.getState().showToast(`批量任务全部完成 (${total}/${total})`, 'success')
-        }
-      }
-      // 非最后一个不弹 toast
-    } else {
+    if (!maybeShowBatchCompletionToast(task)) {
       useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
     }
     const currentMask = useStore.getState().maskDraft
@@ -1384,8 +1396,7 @@ async function executeTask(taskId: string) {
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
     })
-    // 批量子任务出错不逐个弹出 DetailModal，仅非批量出错时弹
-    if (!(task.batch && task.batchTotal && task.batchTotal > 1)) {
+    if (!maybeShowBatchCompletionToast(task)) {
       useStore.getState().setDetailTaskId(taskId)
     }
   } finally {
@@ -1418,6 +1429,7 @@ export async function cancelQueuedTask(task: TaskRecord) {
       elapsed: Date.now() - task.createdAt,
       queuePosition: 0,
     })
+    maybeShowBatchCompletionToast({ ...task, status: 'cancelled' })
   } catch (err) {
     useStore.getState().showToast(err instanceof Error ? err.message : String(err), 'error')
   }
@@ -1446,11 +1458,12 @@ export async function retryTask(task: TaskRecord) {
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
-    batch: task.batch,
-    batchCount: task.batchCount,
-    batchIndex: task.batchIndex,
-    batchTotal: task.batchTotal,
-    serverImagePath: task.serverImagePath,
+    batch: false,
+    batchId: undefined,
+    batchCount: undefined,
+    batchIndex: undefined,
+    batchTotal: undefined,
+    serverImagePath: undefined,
     queuePosition: 0,
   }
 

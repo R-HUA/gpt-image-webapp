@@ -213,6 +213,10 @@ function publicUser(user) {
   }
 }
 
+function getActiveProfileSnapshot() {
+  return structuredClone(store.data.settings.activeProfile || {})
+}
+
 function getJobView(job) {
   return {
     id: job.id,
@@ -303,6 +307,7 @@ function publicBatchUpload(record) {
 }
 
 async function persistResult(job, result) {
+  const activeProfile = job.activeProfile || getActiveProfileSnapshot()
   const usernameDir = safeSegment(job.username)
   const outputDir = path.resolve(rootDir, serverConfig.outputDir, usernameDir)
   const thumbDir = path.resolve(rootDir, serverConfig.thumbnailDir, usernameDir)
@@ -317,8 +322,8 @@ async function persistResult(job, result) {
       username: job.username,
       prompt: job.request.prompt,
       params: job.request.params,
-      apiProvider: store.data.settings.activeProfile.provider,
-      apiModel: store.data.settings.activeProfile.model,
+      apiProvider: activeProfile.provider,
+      apiModel: activeProfile.model,
       outputPath: saved.filePath,
       thumbnailPath: thumbPath,
       outputUrl: `/api/files/result/${encodeURIComponent(records.length)}/${encodeURIComponent(path.basename(saved.filePath))}?resultId=`,
@@ -381,6 +386,7 @@ async function runJob(job) {
   job.startedAt = Date.now()
   job.abortController = new AbortController()
   const startedAt = Date.now()
+  const activeProfile = job.activeProfile || getActiveProfileSnapshot()
   log('info', 'job.started', {
     jobId: job.id,
     username: job.username,
@@ -390,6 +396,9 @@ async function runJob(job) {
     batch: Boolean(job.request.batch),
     batchCount: job.request.batchCount,
     serverImagePath: job.request.serverImagePath,
+    provider: activeProfile.provider,
+    model: activeProfile.model,
+    apiMode: activeProfile.apiMode,
   })
   try {
     let requests = [job.request]
@@ -411,8 +420,26 @@ async function runJob(job) {
       requests = Array.from({ length: count }, () => ({ ...job.request, inputImageDataUrls: [] }))
     }
 
+    let codexCliSplitCount = 0
+    if (activeProfile.codexCli) {
+      requests = requests.flatMap((request) => {
+        const inputImages = Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls : []
+        const count = Math.max(1, Math.min(200, Number(request.params?.n || 1)))
+        if (inputImages.length || count <= 1) return [request]
+        codexCliSplitCount += count
+        return Array.from({ length: count }, () => ({
+          ...request,
+          params: {
+            ...request.params,
+            n: 1,
+          },
+          inputImageDataUrls: [],
+        }))
+      })
+    }
+
     if (job.request.batch) await persistBatchUploads(job, job.request.inputImageDataUrls || [])
-    log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length })
+    log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length, codexCliSplitCount })
 
     const allImages = []
     const actualParamsList = []
@@ -425,15 +452,15 @@ async function runJob(job) {
         jobId: job.id,
         requestIndex: i + 1,
         requestCount: requests.length,
-        provider: store.data.settings.activeProfile.provider,
-        model: store.data.settings.activeProfile.model,
-        apiMode: store.data.settings.activeProfile.apiMode,
+        provider: activeProfile.provider,
+        model: activeProfile.model,
+        apiMode: activeProfile.apiMode,
         requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
         inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
         hasMask: Boolean(request.maskDataUrl),
         sourceServerPath: request.sourceServerPath,
       })
-      const result = await callImageProvider(store.data.settings.activeProfile, request, job.abortController.signal)
+      const result = await callImageProvider(activeProfile, request, job.abortController.signal)
       log('info', 'provider.request.done', {
         jobId: job.id,
         requestIndex: i + 1,
@@ -759,6 +786,7 @@ async function handleApi(req, res, url) {
       finishedAt: null,
       error: null,
       request: body,
+      activeProfile: getActiveProfileSnapshot(),
       result: null,
     }
     enqueue(job)
@@ -769,6 +797,9 @@ async function handleApi(req, res, url) {
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
       promptLength: String(body.prompt || '').length,
       serverImagePath: body.serverImagePath ? '[configured]' : '',
+      provider: job.activeProfile.provider,
+      model: job.activeProfile.model,
+      apiMode: job.activeProfile.apiMode,
     }, req)
     log('info', 'job.create', {
       ...requestLogDetails(req, user),
@@ -778,6 +809,9 @@ async function handleApi(req, res, url) {
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
       promptLength: String(body.prompt || '').length,
       serverImagePath: body.serverImagePath ? '[configured]' : '',
+      provider: job.activeProfile.provider,
+      model: job.activeProfile.model,
+      apiMode: job.activeProfile.apiMode,
     })
     return sendJson(res, { job: getJobView(job) })
   }

@@ -155,6 +155,7 @@ export interface TaskRecord {
   queuePosition?: number
   /** 批量任务标记 */
   batch?: boolean
+  batchId?: string
   batchCount?: number
   batchIndex?: number
   batchTotal?: number

@@ -78,7 +78,7 @@ vi.mock('./lib/backend', () => ({
   cancelBackendJob: vi.fn(),
 }))
 import { clearImages, putImage } from './lib/db'
-import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, reuseConfig, submitTask, useStore } from './store'
+import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -178,8 +178,55 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.tasks).toHaveLength(2)
     expect(state.tasks.map((item) => item.inputImageIds)).toEqual([[imageA.id], [imageB.id]])
     expect(state.tasks.map((item) => [item.batchIndex, item.batchTotal])).toEqual([[1, 2], [2, 2]])
+    expect(state.tasks[0].batchId).toBeTruthy()
+    expect(state.tasks[1].batchId).toBe(state.tasks[0].batchId)
     expect(backendJobs).toHaveLength(2)
     expect(backendJobs.map((job) => job.inputImageDataUrls.length)).toEqual([1, 1])
+  })
+
+  it('assigns distinct ids to separate batches with the same size', async () => {
+    useStore.setState({
+      batchMode: true,
+      batchCount: 2,
+      inputImages: [],
+    })
+
+    await submitTask()
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(4)
+    const newestBatchId = state.tasks[0].batchId
+    const olderBatchId = state.tasks[2].batchId
+    expect(newestBatchId).toBeTruthy()
+    expect(olderBatchId).toBeTruthy()
+    expect(state.tasks[1].batchId).toBe(newestBatchId)
+    expect(state.tasks[3].batchId).toBe(olderBatchId)
+    expect(newestBatchId).not.toBe(olderBatchId)
+  })
+
+  it('retries a batch child as an independent task', async () => {
+    const failedBatchTask = task({
+      status: 'error',
+      batch: true,
+      batchId: 'batch-a',
+      batchCount: 1,
+      batchIndex: 1,
+      batchTotal: 2,
+      serverImagePath: '/input-images',
+    })
+    useStore.setState({ tasks: [failedBatchTask] })
+
+    await retryTask(failedBatchTask)
+
+    const retried = useStore.getState().tasks[0]
+    expect(retried.id).not.toBe(failedBatchTask.id)
+    expect(retried.batch).toBe(false)
+    expect(retried.batchId).toBeUndefined()
+    expect(retried.batchIndex).toBeUndefined()
+    expect(retried.batchTotal).toBeUndefined()
+    expect(retried.serverImagePath).toBeUndefined()
   })
 
   it('passes the configured server image path for admin server-directory jobs', async () => {
