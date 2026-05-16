@@ -418,18 +418,6 @@ async function runJob(job) {
     } else if (job.request.batch && !job.request.inputImageDataUrls?.length) {
       const count = Math.max(1, Math.min(200, Number(job.request.batchCount || 1)))
       requests = Array.from({ length: count }, () => ({ ...job.request, inputImageDataUrls: [] }))
-    } else if (
-      store.data.settings.activeProfile.codexCli &&
-      !job.request.batch &&
-      !job.request.inputImageDataUrls?.length &&
-      job.request.params?.n > 1
-    ) {
-      // Codex CLI doesn't support n>1, split it into n sequential/concurrent requests
-      const count = Math.min(20, Number(job.request.params.n))
-      requests = Array.from({ length: count }, () => ({
-        ...job.request,
-        params: { ...job.request.params, n: 1 }
-      }))
     }
 
     let codexCliSplitCount = 0
@@ -472,18 +460,31 @@ async function runJob(job) {
         hasMask: Boolean(request.maskDataUrl),
         sourceServerPath: request.sourceServerPath,
       })
-      const result = await callImageProvider(activeProfile, request, job.abortController.signal)
-      log('info', 'provider.request.done', {
-        jobId: job.id,
-        requestIndex: i + 1,
-        durationMs: Date.now() - requestStartedAt,
-        imageCount: result.images.length,
-        rawImageUrlCount: result.rawImageUrls?.length || 0,
-      })
-      allImages.push(...result.images)
-      actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
-      revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
-      rawImageUrls.push(...(result.rawImageUrls || []))
+      try {
+        const result = await callImageProvider(activeProfile, request, job.abortController.signal)
+        log('info', 'provider.request.done', {
+          jobId: job.id,
+          requestIndex: i + 1,
+          durationMs: Date.now() - requestStartedAt,
+          imageCount: result.images.length,
+          rawImageUrlCount: result.rawImageUrls?.length || 0,
+        })
+        allImages.push(...result.images)
+        actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
+        revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
+        rawImageUrls.push(...(result.rawImageUrls || []))
+      } catch (err) {
+        log('error', 'provider.request.failed', {
+          jobId: job.id,
+          requestIndex: i + 1,
+          error: err.message || String(err),
+        })
+        // If it's the only request, or if it's the last one and we have NO successful images yet, throw.
+        // Otherwise, we swallow the error and return whatever succeeded.
+        if (requests.length === 1 || (i === requests.length - 1 && allImages.length === 0)) {
+          throw err
+        }
+      }
     }
 
     const result = {
