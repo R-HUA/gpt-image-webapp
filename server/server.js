@@ -477,7 +477,7 @@ async function runJob(job) {
         log('error', 'provider.request.failed', {
           jobId: job.id,
           requestIndex: i + 1,
-          error: err.message || String(err),
+          error: err instanceof Error ? err.message : String(err),
         })
         // If it's the only request, or if it's the last one and we have NO successful images yet, throw.
         // Otherwise, we swallow the error and return whatever succeeded.
