@@ -89,6 +89,66 @@ input[type="number"] {
   0%, 100% { border-color: #3b82f6; }
   50% { border-color: #93c5fd; }
 }
+
+/* 排队态：缓慢呼吸脉冲 */
+@keyframes queue-breathe {
+  0%, 100% { opacity: 0.5; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+.animate-queue-breathe {
+  animation: queue-breathe 2.5s ease-in-out infinite;
+}
+
+/* 排队态：虚线边框脉冲 */
+@keyframes queue-border-pulse {
+  0%, 100% { border-color: #d1d5db; }
+  50% { border-color: #9ca3af; }
+}
+@media (prefers-color-scheme: dark) {
+  @keyframes queue-border-pulse {
+    0%, 100% { border-color: rgba(255,255,255,0.08); }
+    50% { border-color: rgba(255,255,255,0.18); }
+  }
+}
+.task-card-queued {
+  border-style: dashed !important;
+  animation: queue-border-pulse 3s ease-in-out infinite;
+}
+
+/* 批量堆叠卡片装饰层 */
+.batch-stack-wrapper {
+  position: relative;
+}
+.batch-stack-shadow {
+  position: absolute;
+  inset: 0;
+  border-radius: 0.75rem;
+  border: 1px dashed #d1d5db;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  .batch-stack-shadow {
+    border-color: rgba(255,255,255,0.06);
+  }
+}
+.batch-stack-shadow-1 {
+  transform: translateY(6px) scale(0.97);
+  opacity: 0.6;
+  background: rgba(243,244,246,0.5);
+}
+.batch-stack-shadow-2 {
+  transform: translateY(12px) scale(0.94);
+  opacity: 0.35;
+  background: rgba(243,244,246,0.3);
+}
+@media (prefers-color-scheme: dark) {
+  .batch-stack-shadow-1 {
+    background: rgba(31,41,55,0.5);
+  }
+  .batch-stack-shadow-2 {
+    background: rgba(31,41,55,0.3);
+  }
+}
 .hide-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;

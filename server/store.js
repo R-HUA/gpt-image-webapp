@@ -15,6 +15,7 @@ const EMPTY_DB = {
       apiMode: 'images',
       timeout: 300,
       responseFormatB64Json: true,
+      codexCli: false,
     },
   },
   results: [],
@@ -61,8 +62,12 @@ export class JsonStore {
   }
 
   async save() {
-    const payload = JSON.stringify(this.data, null, 2)
-    this.writeLock = this.writeLock.then(() => fs.writeFile(this.filePath, payload))
+    // Defer serialization into the lock chain so each write always captures
+    // the latest in-memory state, avoiding stale-snapshot races when multiple
+    // concurrent jobs call save() between awaits.
+    this.writeLock = this.writeLock.then(() =>
+      fs.writeFile(this.filePath, JSON.stringify(this.data, null, 2))
+    )
     await this.writeLock
   }
 }

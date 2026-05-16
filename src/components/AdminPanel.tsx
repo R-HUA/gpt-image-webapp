@@ -76,7 +76,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
     <div className="space-y-4">
       {error && <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-500 dark:bg-red-500/10">{error}</div>}
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid gap-4">
         <div className="rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
           <h3 className="mb-3 text-sm font-bold">用户</h3>
           <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.5rem]">
@@ -128,23 +128,26 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                   </button>
-                <button onClick={async () => { await updateUser(item.username, { disabled: !item.disabled }); await refresh() }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title={item.disabled ? '启用' : '禁用'} aria-label={item.disabled ? '启用' : '禁用'}>
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {item.disabled ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 015.636 5.636m12.728 12.728A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />}
-                  </svg>
-                </button>
-                <button onClick={async () => { await deleteUser(item.username); await refresh() }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除用户" aria-label="删除用户">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
-                  </svg>
-                </button>
+                  <button onClick={async () => { await updateUser(item.username, { disabled: !item.disabled }); await refresh() }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title={item.disabled ? '启用' : '禁用'} aria-label={item.disabled ? '启用' : '禁用'}>
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {item.disabled ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 015.636 5.636m12.728 12.728A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />}
+                    </svg>
+                  </button>
+                  <button onClick={async () => { await deleteUser(item.username); await refresh() }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除用户" aria-label="删除用户">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
+
+      </section>
+
+      <section className="mt-4 rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
           <h3 className="mb-3 text-sm font-bold">上游服务商</h3>
           {settings && (
             <div className="space-y-3">
@@ -152,12 +155,37 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               <input type="number" min={1} max={20} value={settings.concurrency} onChange={(e) => setSettings({ ...settings, concurrency: Number(e.target.value) })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">服务器图片目录</label>
               <input value={settings.serverImagePath || ''} onChange={(e) => setSettings({ ...settings, serverImagePath: e.target.value })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              <label className="block text-xs text-gray-500">服务商类型</label>
+              <select value={settings.activeProfile.provider || 'openai'} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, provider: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <option value="openai">OpenAI 兼容接口</option>
+                <option value="fal">fal.ai</option>
+              </select>
               <label className="block text-xs text-gray-500">上游服务商 Base URL</label>
               <input value={settings.activeProfile.baseUrl || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, baseUrl: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">上游服务商密钥</label>
-              <input value={settings.activeProfile.apiKey || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, apiKey: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              <input value={settings.activeProfile.apiKey || ''} type="password" onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, apiKey: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">模型</label>
               <input value={settings.activeProfile.model || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, model: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              <label className="block text-xs text-gray-500">请求模式</label>
+              <select value={settings.activeProfile.apiMode || 'images'} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, apiMode: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <option value="images">Images API (v1/images/generations)</option>
+                <option value="responses">Responses API (v1/responses)</option>
+              </select>
+              <label className="block text-xs text-gray-500">超时时间 (秒)</label>
+              <input type="number" value={settings.activeProfile.timeout || 300} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, timeout: Number(e.target.value) } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              {settings.activeProfile.provider === 'openai' && (
+                <div className="space-y-2 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.02]">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <input type="checkbox" checked={!!settings.activeProfile.codexCli} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, codexCli: e.target.checked } })} className="rounded border-gray-300 dark:border-white/[0.1] dark:bg-white/[0.03]" />
+                    Codex CLI 兼容模式
+                  </label>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">开启后跳过 quality 参数、添加 prompt 改写保护前缀，并在 N&gt;1 时拆分为并发单请求。</p>
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <input type="checkbox" checked={!!settings.activeProfile.responseFormatB64Json} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, responseFormatB64Json: e.target.checked } })} className="rounded border-gray-300 dark:border-white/[0.1] dark:bg-white/[0.03]" />
+                    返回 Base64 图片数据
+                  </label>
+                </div>
+              )}
               <button onClick={saveSettings} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white" title="保存设置" aria-label="保存设置">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -165,8 +193,8 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               </button>
             </div>
           )}
-        </div>
       </section>
+
 
       <section className="mt-4 rounded-xl border border-gray-200/70 p-4 dark:border-white/[0.08]">
         <h3 className="mb-1 text-sm font-bold">后端访问令牌</h3>

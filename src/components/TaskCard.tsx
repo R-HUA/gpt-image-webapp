@@ -127,9 +127,9 @@ export default function TaskCard({
     }
   }, [])
 
-  // 定时更新运行中任务的计时
+  // 定时更新运行中任务的计时（排队态不计时）
   useEffect(() => {
-    if (task.status !== 'queued' && task.status !== 'running' && !(task.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
+    if (task.status !== 'running' && !(task.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => clearInterval(id)
@@ -187,7 +187,7 @@ export default function TaskCard({
   const showSwipeAction = isSwipeReady || swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
-  const showRunningTimer = task.status === 'queued' || task.status === 'running' || isFalReconnecting || isCustomReconnecting
+  const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -232,8 +232,10 @@ export default function TaskCard({
         className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
-          task.status === 'queued' || task.status === 'running'
-            ? 'border-blue-400 generating'
+          task.status === 'running'
+            ? 'border-blue-400'
+            : task.status === 'queued'
+            ? 'task-card-queued'
             : isSelected
             ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
             : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'
@@ -270,7 +272,22 @@ export default function TaskCard({
               {task.batchIndex}/{task.batchTotal}
             </div>
           )}
-          {(task.status === 'queued' || task.status === 'running') && (
+          {task.status === 'queued' && (
+            <div className="flex flex-col items-center gap-2">
+              <svg
+                className="w-8 h-8 text-gray-400 dark:text-gray-500 animate-queue-breathe"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                排队中{task.queuePosition ? ` #${task.queuePosition}` : ''}
+              </span>
+            </div>
+          )}
+          {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -292,7 +309,7 @@ export default function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">
-                {task.status === 'queued' ? `排队中${task.queuePosition ? ` #${task.queuePosition}` : ''}` : '生成中...'}
+                生成中...
               </span>
             </div>
           )}
@@ -367,9 +384,18 @@ export default function TaskCard({
               />
             </svg>
           )}
-          {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
+          {/* 运行中显示耗时，排队中不显示计时，完成后显示封面图比例与分辨率标签 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
+            {showRunningTimer ? (
+              <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {duration}
+              </span>
+            ) : task.status === 'queued' ? (
+              null
+            ) : task.status !== 'done' || !coverRatio || !coverSize ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />

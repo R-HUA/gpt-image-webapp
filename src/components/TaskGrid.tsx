@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import React, { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
 import TaskCard from './TaskCard'
 
@@ -287,33 +287,113 @@ export default function TaskGrid() {
       className="relative min-h-[50vh]"
     >
       <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {filteredTasks.map((task) => (
-          <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
-            <TaskCard
-              task={task}
-              onClick={(e) => {
-                if (Date.now() < suppressClickUntil.current) {
-                  e.preventDefault()
-                  return
-                }
-                suppressClickUntil.current = 0
-                const isCtrl = isMac ? e.metaKey : e.ctrlKey
-                if (isCtrl) {
-                  useStore.getState().toggleTaskSelection(task.id)
-                } else if (selectedTaskIds.length > 0) {
-                  clearSelection()
-                  setDetailTaskId(task.id)
+        {(() => {
+          const rendered: React.ReactNode[] = []
+          const skipSet = new Set<string>()
+
+          for (let i = 0; i < filteredTasks.length; i++) {
+            const task = filteredTasks[i]
+            if (skipSet.has(task.id)) continue
+
+            // Check if this task is part of a batch group that's all queued
+            if (task.batch && task.batchTotal && task.batchTotal > 1 && task.status === 'queued') {
+              // Collect consecutive queued tasks from the same batch
+              const group = [task]
+              for (let j = i + 1; j < filteredTasks.length; j++) {
+                const next = filteredTasks[j]
+                if (
+                  next.batch &&
+                  next.batchTotal === task.batchTotal &&
+                  next.status === 'queued' &&
+                  Math.abs(next.createdAt - task.createdAt) < task.batchTotal * 2
+                ) {
+                  group.push(next)
+                  skipSet.add(next.id)
                 } else {
-                  setDetailTaskId(task.id)
+                  break
                 }
-              }}
-              onReuse={() => reuseConfig(task)}
-              onEditOutputs={() => editOutputs(task)}
-              onDelete={() => handleDelete(task)}
-              isSelected={selectedTaskIds.includes(task.id)}
-            />
-          </div>
-        ))}
+              }
+
+              if (group.length > 1) {
+                // Render stacked card
+                const stackCount = group.length
+                rendered.push(
+                  <div key={task.id} className="task-card-wrapper batch-stack-wrapper" data-task-id={task.id} style={{ marginBottom: stackCount > 2 ? '14px' : '8px' }}>
+                    {/* Shadow layers */}
+                    {stackCount > 2 && <div className="batch-stack-shadow batch-stack-shadow-2" />}
+                    <div className="batch-stack-shadow batch-stack-shadow-1" />
+                    {/* Batch count badge */}
+                    <div className="absolute -top-2 -right-2 z-20 flex items-center gap-1 rounded-full bg-gray-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      ×{stackCount} 排队中
+                    </div>
+                    {/* Main visible card */}
+                    <div className="relative z-10">
+                      <TaskCard
+                        task={task}
+                        onClick={(e) => {
+                          if (Date.now() < suppressClickUntil.current) {
+                            e.preventDefault()
+                            return
+                          }
+                          suppressClickUntil.current = 0
+                          const isCtrl = isMac ? e.metaKey : e.ctrlKey
+                          if (isCtrl) {
+                            // Ctrl-click selects all in group
+                            for (const t of group) useStore.getState().toggleTaskSelection(t.id)
+                          } else if (selectedTaskIds.length > 0) {
+                            clearSelection()
+                            setDetailTaskId(task.id)
+                          } else {
+                            setDetailTaskId(task.id)
+                          }
+                        }}
+                        onReuse={() => reuseConfig(task)}
+                        onEditOutputs={() => editOutputs(task)}
+                        onDelete={() => handleDelete(task)}
+                        isSelected={selectedTaskIds.includes(task.id)}
+                      />
+                    </div>
+                  </div>
+                )
+                continue
+              }
+            }
+
+            // Normal rendering
+            rendered.push(
+              <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
+                <TaskCard
+                  task={task}
+                  onClick={(e) => {
+                    if (Date.now() < suppressClickUntil.current) {
+                      e.preventDefault()
+                      return
+                    }
+                    suppressClickUntil.current = 0
+                    const isCtrl = isMac ? e.metaKey : e.ctrlKey
+                    if (isCtrl) {
+                      useStore.getState().toggleTaskSelection(task.id)
+                    } else if (selectedTaskIds.length > 0) {
+                      clearSelection()
+                      setDetailTaskId(task.id)
+                    } else {
+                      setDetailTaskId(task.id)
+                    }
+                  }}
+                  onReuse={() => reuseConfig(task)}
+                  onEditOutputs={() => editOutputs(task)}
+                  onDelete={() => handleDelete(task)}
+                  isSelected={selectedTaskIds.includes(task.id)}
+                />
+              </div>
+            )
+          }
+
+          return rendered
+        })()}
       </div>
       {selectionBox && (
         <div

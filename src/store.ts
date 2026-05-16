@@ -1266,7 +1266,7 @@ async function executeTask(taskId: string) {
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
       batch: Boolean(task.batch),
-      batchCount: task.batch ? 1 : undefined,
+      batchCount: task.batchCount,
       serverImagePath: task.serverImagePath,
     })
 
@@ -1342,8 +1342,27 @@ async function executeTask(taskId: string) {
       customRecoverable: false,
       queuePosition: 0,
     })
-
-    useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+    // 批量任务汇总 toast：仅在最后一个子任务完成时弹出
+    if (task.batch && task.batchTotal && task.batchTotal > 1) {
+      const batchTotal = task.batchTotal
+      const allTasks = useStore.getState().tasks
+      const siblings = allTasks.filter(
+        (t) => t.batch && t.batchTotal === batchTotal && Math.abs(t.createdAt - task.createdAt) < batchTotal * 2,
+      )
+      const doneCount = siblings.filter((t) => t.status === 'done').length
+      const errorCount = siblings.filter((t) => t.status === 'error').length
+      const total = siblings.length
+      if (doneCount + errorCount >= total) {
+        if (errorCount > 0) {
+          useStore.getState().showToast(`批量任务完成 ${doneCount}/${total}，${errorCount} 个失败`, errorCount === total ? 'error' : 'success')
+        } else {
+          useStore.getState().showToast(`批量任务全部完成 (${total}/${total})`, 'success')
+        }
+      }
+      // 非最后一个不弹 toast
+    } else {
+      useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -1365,7 +1384,10 @@ async function executeTask(taskId: string) {
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
     })
-    useStore.getState().setDetailTaskId(taskId)
+    // 批量子任务出错不逐个弹出 DetailModal，仅非批量出错时弹
+    if (!(task.batch && task.batchTotal && task.batchTotal > 1)) {
+      useStore.getState().setDetailTaskId(taskId)
+    }
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
     for (const imgId of task.inputImageIds) {

@@ -138,17 +138,19 @@ function createResponsesInput(prompt, inputImages) {
 
 async function callResponses(profile, request, signal) {
   const params = request.params
+  const tool = {
+    type: 'image_generation',
+    action: request.inputImageDataUrls?.length ? 'edit' : 'generate',
+    size: params.size,
+    output_format: params.output_format,
+    ...(request.maskDataUrl ? { input_image_mask: { image_url: request.maskDataUrl } } : {}),
+  }
+  // Codex CLI: skip quality param (not supported)
+  if (!profile.codexCli) tool.quality = params.quality
   const body = {
     model: profile.model,
     input: createResponsesInput(request.prompt, request.inputImageDataUrls || []),
-    tools: [{
-      type: 'image_generation',
-      action: request.inputImageDataUrls?.length ? 'edit' : 'generate',
-      size: params.size,
-      quality: params.quality,
-      output_format: params.output_format,
-      ...(request.maskDataUrl ? { input_image_mask: { image_url: request.maskDataUrl } } : {}),
-    }],
+    tools: [tool],
     tool_choice: 'required',
   }
   const endpoint = buildApiUrl(profile.baseUrl, 'responses')
@@ -192,12 +194,18 @@ async function callImages(profile, request, signal) {
   const timeout = AbortSignal.timeout(Math.max(1, Number(profile.timeout || 300)) * 1000)
   const compositeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
 
+  // Codex CLI: prepend prompt rewrite guard
+  const prompt = profile.codexCli
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${request.prompt}`
+    : request.prompt
+
   if (request.inputImageDataUrls?.length) {
     const form = new FormData()
     form.append('model', profile.model)
-    form.append('prompt', request.prompt)
+    form.append('prompt', prompt)
     form.append('size', params.size)
-    form.append('quality', params.quality)
+    // Codex CLI: skip quality param (not supported)
+    if (!profile.codexCli) form.append('quality', params.quality)
     form.append('output_format', params.output_format)
     form.append('moderation', params.moderation)
     if (params.output_compression != null) form.append('output_compression', String(params.output_compression))
@@ -233,13 +241,15 @@ async function callImages(profile, request, signal) {
 
   const body = {
     model: profile.model,
-    prompt: request.prompt,
+    prompt,
     size: params.size,
-    quality: params.quality,
+    // Codex CLI: skip quality param (not supported)
+    ...(profile.codexCli ? {} : { quality: params.quality }),
     output_format: params.output_format,
     moderation: params.moderation,
     ...(params.output_compression != null ? { output_compression: params.output_compression } : {}),
-    ...(params.n > 1 ? { n: params.n } : {}),
+    // Codex CLI: n>1 not supported, always send single; caller handles concurrency
+    ...(params.n > 1 && !profile.codexCli ? { n: params.n } : {}),
     ...(profile.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
   }
   const endpoint = buildApiUrl(profile.baseUrl, 'images/generations')
