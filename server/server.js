@@ -418,6 +418,18 @@ async function runJob(job) {
     } else if (job.request.batch && !job.request.inputImageDataUrls?.length) {
       const count = Math.max(1, Math.min(200, Number(job.request.batchCount || 1)))
       requests = Array.from({ length: count }, () => ({ ...job.request, inputImageDataUrls: [] }))
+    } else if (
+      store.data.settings.activeProfile.codexCli &&
+      !job.request.batch &&
+      !job.request.inputImageDataUrls?.length &&
+      job.request.params?.n > 1
+    ) {
+      // Codex CLI doesn't support n>1, split it into n sequential/concurrent requests
+      const count = Math.min(20, Number(job.request.params.n))
+      requests = Array.from({ length: count }, () => ({
+        ...job.request,
+        params: { ...job.request.params, n: 1 }
+      }))
     }
 
     let codexCliSplitCount = 0
