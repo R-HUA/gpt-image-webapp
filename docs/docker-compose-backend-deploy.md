@@ -77,10 +77,16 @@ volumes:
 docker compose -f deploy/docker-compose.backend.yml up -d --build
 ```
 
-查看日志。后端会输出 JSON 行日志，包含任务入队、开始执行、上游服务商请求、图片落盘、缩略图生成和错误堆栈：
+查看日志。后端会输出接近 log4j 的单行日志，包含任务入队、开始执行、上游服务商请求、图片落盘、缩略图生成和错误堆栈：
 
 ```bash
 docker compose -f deploy/docker-compose.backend.yml logs -f
+```
+
+上游失败时会明确输出 HTTP 状态、接口路径、模型、请求类型、输入图数量和上游响应摘要，例如：
+
+```text
+2026-05-16 02:16:31.400 ERROR [gpt-image-backend] job.failed - jobId=job_xxx username=admin upstreamStatus=400 upstreamEndpoint=https://api.openai.com/v1/images/edits upstreamModel=gpt-image-2 upstreamRequestType=edit upstreamInputImageCount=1 upstreamBodyPreview="{\"error\":{\"message\":\"...\"}}"
 ```
 
 访问：

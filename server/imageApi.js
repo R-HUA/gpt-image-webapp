@@ -36,16 +36,50 @@ async function readImageUrlAsDataUrl(url, fallbackMime, signal) {
 }
 
 async function getApiErrorMessage(response) {
+  const fallback = `HTTP ${response.status} ${response.statusText || ''}`.trim()
   try {
     const payload = await response.json()
-    return payload?.error?.message || payload?.message || payload?.detail || `HTTP ${response.status}`
+    return {
+      message: payload?.error?.message || payload?.message || payload?.detail || fallback,
+      bodyPreview: JSON.stringify(payload).slice(0, 2000),
+      errorType: payload?.error?.type,
+      errorCode: payload?.error?.code,
+      errorParam: payload?.error?.param,
+    }
   } catch {
     try {
-      return await response.text()
+      const text = await response.text()
+      return { message: text || fallback, bodyPreview: text.slice(0, 2000) }
     } catch {
-      return `HTTP ${response.status}`
+      return { message: fallback, bodyPreview: '' }
     }
   }
+}
+
+async function throwUpstreamError(response, context) {
+  const details = await getApiErrorMessage(response)
+  const endpoint = context?.endpoint || response.url
+  const message = `上游请求失败：HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''} ${context?.method || 'POST'} ${endpoint} - ${details.message}`
+  const err = new Error(message)
+  err.name = 'UpstreamRequestError'
+  err.upstream = {
+    status: response.status,
+    statusText: response.statusText,
+    endpoint,
+    method: context?.method || 'POST',
+    provider: context?.provider,
+    model: context?.model,
+    apiMode: context?.apiMode,
+    requestType: context?.requestType,
+    inputImageCount: context?.inputImageCount,
+    hasMask: context?.hasMask,
+    timeoutSeconds: context?.timeoutSeconds,
+    errorType: details.errorType,
+    errorCode: details.errorCode,
+    errorParam: details.errorParam,
+    bodyPreview: details.bodyPreview,
+  }
+  throw err
 }
 
 function buildApiUrl(baseUrl, apiPath) {
@@ -117,7 +151,8 @@ async function callResponses(profile, request, signal) {
     }],
     tool_choice: 'required',
   }
-  const res = await fetch(buildApiUrl(profile.baseUrl, 'responses'), {
+  const endpoint = buildApiUrl(profile.baseUrl, 'responses')
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${profile.apiKey}`,
@@ -126,7 +161,15 @@ async function callResponses(profile, request, signal) {
     body: JSON.stringify(body),
     signal,
   })
-  if (!res.ok) throw new Error(await getApiErrorMessage(res))
+  if (!res.ok) await throwUpstreamError(res, {
+    endpoint,
+    provider: profile.provider,
+    model: profile.model,
+    apiMode: profile.apiMode,
+    requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
+    inputImageCount: request.inputImageDataUrls?.length || 0,
+    hasMask: Boolean(request.maskDataUrl),
+  })
   const payload = await res.json()
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const items = Array.isArray(payload.output) ? payload.output.filter((item) => item?.type === 'image_generation_call') : []
@@ -168,13 +211,23 @@ async function callImages(profile, request, signal) {
       const { buffer } = dataUrlToBuffer(request.maskDataUrl)
       form.append('mask', new Blob([buffer], { type: 'image/png' }), 'mask.png')
     }
-    const res = await fetch(buildApiUrl(profile.baseUrl, 'images/edits'), {
+    const endpoint = buildApiUrl(profile.baseUrl, 'images/edits')
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${profile.apiKey}` },
       body: form,
       signal: compositeSignal,
     })
-    if (!res.ok) throw new Error(await getApiErrorMessage(res))
+    if (!res.ok) await throwUpstreamError(res, {
+      endpoint,
+      provider: profile.provider,
+      model: profile.model,
+      apiMode: profile.apiMode,
+      requestType: 'edit',
+      inputImageCount: request.inputImageDataUrls.length,
+      hasMask: Boolean(request.maskDataUrl),
+      timeoutSeconds: Math.max(1, Number(profile.timeout || 300)),
+    })
     return parseImagesPayload(await res.json(), mime, compositeSignal)
   }
 
@@ -189,7 +242,8 @@ async function callImages(profile, request, signal) {
     ...(params.n > 1 ? { n: params.n } : {}),
     ...(profile.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
   }
-  const res = await fetch(buildApiUrl(profile.baseUrl, 'images/generations'), {
+  const endpoint = buildApiUrl(profile.baseUrl, 'images/generations')
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${profile.apiKey}`,
@@ -198,7 +252,16 @@ async function callImages(profile, request, signal) {
     body: JSON.stringify(body),
     signal: compositeSignal,
   })
-  if (!res.ok) throw new Error(await getApiErrorMessage(res))
+  if (!res.ok) await throwUpstreamError(res, {
+    endpoint,
+    provider: profile.provider,
+    model: profile.model,
+    apiMode: profile.apiMode,
+    requestType: 'generate',
+    inputImageCount: 0,
+    hasMask: false,
+    timeoutSeconds: Math.max(1, Number(profile.timeout || 300)),
+  })
   return parseImagesPayload(await res.json(), mime, compositeSignal)
 }
 

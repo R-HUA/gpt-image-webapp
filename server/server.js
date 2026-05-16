@@ -19,15 +19,26 @@ let activeCount = 0
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 const PAGE_SIZE_MAX = 100
+const LOG_COMPONENT = 'gpt-image-backend'
+
+function formatLogValue(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') {
+    const text = value.replace(/\s+/g, ' ').trim()
+    return /[\s="]/.test(text) ? `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : text
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return `"${JSON.stringify(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
 
 function log(level, event, details = {}) {
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    event,
-    ...details,
-  }
-  const line = JSON.stringify(entry)
+  const timestamp = new Date().toISOString().replace('T', ' ').replace('Z', '')
+  const normalizedLevel = String(level || 'info').toUpperCase().padEnd(5)
+  const pairs = Object.entries(details)
+    .filter(([, value]) => value !== undefined && value !== '')
+    .map(([key, value]) => `${key}=${formatLogValue(value)}`)
+    .join(' ')
+  const line = `${timestamp} ${normalizedLevel} [${LOG_COMPONENT}] ${event}${pairs ? ` - ${pairs}` : ''}`
   if (level === 'error') console.error(line)
   else console.log(line)
 }
@@ -37,6 +48,16 @@ function logError(event, err, details = {}) {
     ...details,
     errorName: err?.name,
     errorMessage: err instanceof Error ? err.message : String(err),
+    upstreamStatus: err?.upstream?.status,
+    upstreamEndpoint: err?.upstream?.endpoint,
+    upstreamModel: err?.upstream?.model,
+    upstreamRequestType: err?.upstream?.requestType,
+    upstreamInputImageCount: err?.upstream?.inputImageCount,
+    upstreamHasMask: err?.upstream?.hasMask,
+    upstreamErrorType: err?.upstream?.errorType,
+    upstreamErrorCode: err?.upstream?.errorCode,
+    upstreamErrorParam: err?.upstream?.errorParam,
+    upstreamBodyPreview: err?.upstream?.bodyPreview,
     errorStack: err?.stack,
   })
 }
@@ -407,6 +428,7 @@ async function runJob(job) {
         provider: store.data.settings.activeProfile.provider,
         model: store.data.settings.activeProfile.model,
         apiMode: store.data.settings.activeProfile.apiMode,
+        requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
         inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
         hasMask: Boolean(request.maskDataUrl),
         sourceServerPath: request.sourceServerPath,
