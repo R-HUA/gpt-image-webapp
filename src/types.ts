@@ -175,6 +175,10 @@ export interface TaskRecord {
   outputImages: string[]
   /** API 返回的原始图片 HTTP URL（非 base64 时记录） */
   rawImageUrls?: string[]
+  /** 多请求后端任务中部分上游请求失败，但已有图片成功返回 */
+  partialFailure?: boolean
+  failedCount?: number
+  requestErrors?: Array<{ requestIndex: number; message: string }>
   /** 发生解析错误时的原始响应 JSON */
   rawResponsePayload?: string
   status: TaskStatus

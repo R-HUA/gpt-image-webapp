@@ -27,6 +27,9 @@ export interface BackendJobResult {
   actualParamsList?: Array<Partial<TaskParams> | undefined>
   revisedPrompts?: Array<string | undefined>
   rawImageUrls?: string[]
+  partialFailure?: boolean
+  failedCount?: number
+  requestErrors?: Array<{ requestIndex: number; message: string }>
   records?: Array<{ id: string; outputUrl: string; thumbnailUrl: string }>
 }
 

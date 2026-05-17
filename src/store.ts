@@ -678,12 +678,18 @@ function maybeShowBatchCompletionToast(task: TaskRecord): boolean {
   const errorCount = siblings.filter((item) => item.status === 'error').length
   const cancelledCount = siblings.filter((item) => item.status === 'cancelled').length
   const failedCount = errorCount + cancelledCount
+  const partialFailedCount = siblings.reduce((sum, item) => (
+    sum + (item.partialFailure ? item.failedCount || item.requestErrors?.length || 0 : 0)
+  ), 0)
   if (doneCount + failedCount < total) return true
   if (completedBatchToasts.has(task.batchId)) return true
   completedBatchToasts.add(task.batchId)
 
-  if (failedCount > 0) {
-    useStore.getState().showToast(`批量任务完成 ${doneCount}/${total}，${failedCount} 个失败或取消`, failedCount === total ? 'error' : 'success')
+  if (failedCount > 0 || partialFailedCount > 0) {
+    const parts = [`批量任务完成 ${doneCount}/${total}`]
+    if (failedCount > 0) parts.push(`${failedCount} 个失败或取消`)
+    if (partialFailedCount > 0) parts.push(`${partialFailedCount} 个子请求失败`)
+    useStore.getState().showToast(parts.join('，'), failedCount === total ? 'error' : 'success')
   } else {
     useStore.getState().showToast(`批量任务全部完成 (${total}/${total})`, 'success')
   }
@@ -1366,6 +1372,9 @@ async function executeTask(taskId: string) {
       actualParams,
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
+      partialFailure: result.partialFailure || undefined,
+      failedCount: result.failedCount || undefined,
+      requestErrors: result.requestErrors?.length ? result.requestErrors : undefined,
       status: 'done',
       finishedAt: backendJob.finishedAt ?? Date.now(),
       elapsed: (backendJob.finishedAt ?? Date.now()) - task.createdAt,
@@ -1374,7 +1383,11 @@ async function executeTask(taskId: string) {
       queuePosition: 0,
     })
     if (!maybeShowBatchCompletionToast(task)) {
-      useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+      if (result.partialFailure && (result.failedCount || result.requestErrors?.length)) {
+        useStore.getState().showToast(`部分完成：成功 ${outputIds.length}，失败 ${result.failedCount || result.requestErrors?.length || 0}`, 'success')
+      } else {
+        useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+      }
     }
     const currentMask = useStore.getState().maskDraft
     if (

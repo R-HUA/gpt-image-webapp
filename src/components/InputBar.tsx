@@ -505,6 +505,12 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const referenceImages = maskTargetImage
     ? inputImages.filter((img) => img.id !== maskTargetImage.id)
     : inputImages
+
+  useEffect(() => {
+    if (user?.role !== 'admin' && serverImageBatchMode) {
+      setServerImageBatchMode(false)
+    }
+  }, [user?.role, serverImageBatchMode, setServerImageBatchMode])
   const cursorPosition = cursorPos
   const visiblePrompt = stripImageMentionMarkers(prompt)
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPosition)

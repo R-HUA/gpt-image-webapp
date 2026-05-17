@@ -22,29 +22,38 @@ import GalleryPage from './components/GalleryPage'
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
+  const setServerImageBatchMode = useStore((s) => s.setServerImageBatchMode)
   const [user, setUser] = useState<BackendUser | null>(null)
   const [sessionLoaded, setSessionLoaded] = useState(false)
   const [route, setRoute] = useState(window.location.pathname === '/gallery' ? 'gallery' : 'home')
   useDockerApiUrlMigrationNotice()
 
+  const clearBackendRuntimeState = () => {
+    setServerImageBatchMode(false)
+    setSettings({ adminServerImagePath: '', backendCodexCli: false })
+  }
+
   const refreshSession = () => {
     getSession()
       .then((res) => {
         setUser(res.user)
+        if (res.user?.role !== 'admin') {
+          setServerImageBatchMode(false)
+        }
         if (res.user) {
           getRuntimeSettings()
             .then((settingsRes) => setSettings({
               adminServerImagePath: settingsRes.settings?.serverImagePath || '',
               backendCodexCli: Boolean(settingsRes.settings?.codexCli),
             }))
-            .catch(() => {})
+            .catch(clearBackendRuntimeState)
         } else {
-          setSettings({ adminServerImagePath: '', backendCodexCli: false })
+          clearBackendRuntimeState()
         }
       })
       .catch(() => {
         setUser(null)
-        setSettings({ adminServerImagePath: '', backendCodexCli: false })
+        clearBackendRuntimeState()
       })
       .finally(() => setSessionLoaded(true))
   }
@@ -107,7 +116,15 @@ export default function App() {
 
   return (
     <>
-      <Header user={user} onLogout={() => { setUser(null); navigate('home') }} onOpenGallery={() => navigate('gallery')} />
+      <Header
+        user={user}
+        onLogout={() => {
+          setUser(null)
+          clearBackendRuntimeState()
+          navigate('home')
+        }}
+        onOpenGallery={() => navigate('gallery')}
+      />
       <main data-home-main data-drag-select-surface className="pb-48">
         <div className="safe-area-x max-w-7xl mx-auto">
           <SearchBar />

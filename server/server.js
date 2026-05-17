@@ -196,11 +196,15 @@ function requireAdmin(req, res) {
 }
 
 async function bootstrapAdmin() {
-  if (!store.data.adminPasswordHash) {
-    store.data.adminPasswordHash = hashPassword(serverConfig.admin.password, 'admin-fixed-salt')
-    await store.save()
-    log('info', 'admin.bootstrap_password.initialized', { username: serverConfig.admin.username })
-  }
+  const previousHash = store.data.adminPasswordHash
+  const nextHash = hashPassword(serverConfig.admin.password, 'admin-fixed-salt')
+  if (previousHash === nextHash) return
+
+  store.data.adminPasswordHash = nextHash
+  await store.save()
+  log('info', previousHash ? 'admin.bootstrap_password.enforced' : 'admin.bootstrap_password.initialized', {
+    username: serverConfig.admin.username,
+  })
 }
 
 function publicUser(user) {
@@ -453,6 +457,7 @@ async function runJob(job) {
     const actualParamsList = []
     const revisedPrompts = []
     const rawImageUrls = []
+    const requestErrors = []
     for (let i = 0; i < requests.length; i++) {
       const request = requests[i]
       const requestStartedAt = Date.now()
@@ -482,10 +487,19 @@ async function runJob(job) {
         revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
         rawImageUrls.push(...(result.rawImageUrls || []))
       } catch (err) {
-        log('error', 'provider.request.failed', {
+        const message = err instanceof Error ? err.message : String(err)
+        requestErrors.push({ requestIndex: i + 1, message })
+        logError('provider.request.failed', err, {
           jobId: job.id,
           requestIndex: i + 1,
-          error: err instanceof Error ? err.message : String(err),
+          requestCount: requests.length,
+          provider: activeProfile.provider,
+          model: activeProfile.model,
+          apiMode: activeProfile.apiMode,
+          requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
+          inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
+          hasMask: Boolean(request.maskDataUrl),
+          sourceServerPath: request.sourceServerPath,
         })
         // If it's the only request, or if it's the last one and we have NO successful images yet, throw.
         // Otherwise, we swallow the error and return whatever succeeded.
@@ -501,6 +515,11 @@ async function runJob(job) {
       actualParamsList,
       revisedPrompts,
       rawImageUrls,
+      ...(requestErrors.length ? {
+        partialFailure: true,
+        failedCount: requestErrors.length,
+        requestErrors,
+      } : {}),
     }
     const records = await persistResult(job, result)
     job.status = 'done'
@@ -519,6 +538,7 @@ async function runJob(job) {
       durationMs: job.finishedAt - startedAt,
       imageCount: allImages.length,
       resultCount: records.length,
+      failedCount: requestErrors.length,
     })
   } catch (err) {
     job.status = job.status === 'cancelled' ? 'cancelled' : 'error'
