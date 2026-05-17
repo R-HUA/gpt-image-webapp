@@ -41,6 +41,10 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
     ])
     setUsers(userRes.users)
     setSettings(settingsRes.settings)
+    useStore.getState().setSettings({
+      adminServerImagePath: settingsRes.settings?.serverImagePath || '',
+      backendCodexCli: Boolean(settingsRes.settings?.activeProfile?.codexCli),
+    })
     setKeys(keysRes.keys)
     setLogs(logRes.logs)
     setUploads(uploadRes.uploads)
@@ -66,7 +70,10 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
     try {
       const res = await updateAdminSettings(settings)
       setSettings(res.settings)
-      useStore.getState().setSettings({ adminServerImagePath: res.settings?.serverImagePath || '' })
+      useStore.getState().setSettings({
+        adminServerImagePath: res.settings?.serverImagePath || '',
+        backendCodexCli: Boolean(res.settings?.activeProfile?.codexCli),
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
-import { getAdminSettings, getSession } from './lib/backend'
+import { getRuntimeSettings, getSession } from './lib/backend'
 import type { BackendUser } from './lib/backend'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
 import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigrationNotice'
@@ -31,15 +31,21 @@ export default function App() {
     getSession()
       .then((res) => {
         setUser(res.user)
-        if (res.user?.role === 'admin') {
-          getAdminSettings()
-            .then((settingsRes) => setSettings({ adminServerImagePath: settingsRes.settings?.serverImagePath || '' }))
+        if (res.user) {
+          getRuntimeSettings()
+            .then((settingsRes) => setSettings({
+              adminServerImagePath: settingsRes.settings?.serverImagePath || '',
+              backendCodexCli: Boolean(settingsRes.settings?.codexCli),
+            }))
             .catch(() => {})
         } else {
-          setSettings({ adminServerImagePath: '' })
+          setSettings({ adminServerImagePath: '', backendCodexCli: false })
         }
       })
-      .catch(() => setUser(null))
+      .catch(() => {
+        setUser(null)
+        setSettings({ adminServerImagePath: '', backendCodexCli: false })
+      })
       .finally(() => setSessionLoaded(true))
   }
 

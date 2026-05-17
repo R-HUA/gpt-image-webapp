@@ -474,6 +474,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const canUseServerImageBatch = user?.role === 'admin' && Boolean(adminServerImagePath)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
+  const codexCliActive = Boolean(settings.backendCodexCli || settings.codexCli)
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
@@ -732,7 +733,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   }
 
   const showQualityHint = () => {
-    if (settings.codexCli || isFalProvider) setQualityHintVisible(true)
+    if (codexCliActive || isFalProvider) setQualityHintVisible(true)
   }
 
   const showSizeHint = () => {
@@ -772,7 +773,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   }
 
   const startQualityHintTouch = () => {
-    if (!settings.codexCli && !isFalProvider) return
+    if (!codexCliActive && !isFalProvider) return
     qualityHintTimerRef.current = window.setTimeout(() => {
       setQualityHintVisible(true)
       qualityHintTimerRef.current = null
@@ -1506,18 +1507,18 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
         <Select
-          value={settings.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
+          value={codexCliActive ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
           onChange={(val) => {
-            if (!settings.codexCli) setParams({ quality: val as any })
+            if (!codexCliActive) setParams({ quality: val as any })
           }}
           options={qualityOptions}
-          disabled={settings.codexCli}
-          className={settings.codexCli
+          disabled={codexCliActive}
+          className={codexCliActive
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
-          visible={(settings.codexCli || isFalProvider) && qualityHintVisible}
+          visible={(codexCliActive || isFalProvider) && qualityHintVisible}
           text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
         />
       </label>

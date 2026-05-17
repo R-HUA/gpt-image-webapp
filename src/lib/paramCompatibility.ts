@@ -23,7 +23,7 @@ export function normalizeParamsForSettings(
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 
-  if (activeProfile.provider === 'openai' && activeProfile.codexCli) {
+  if (settings.backendCodexCli || (activeProfile.provider === 'openai' && activeProfile.codexCli)) {
     nextParams.quality = DEFAULT_PARAMS.quality
   }
 

@@ -308,8 +308,9 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
 
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
+  const { backendCodexCli: _backendCodexCli, ...persistedSettings } = settings
   return {
-    settings,
+    settings: persistedSettings,
     params: state.params,
     ...(settings.persistInputOnRestart
       ? {

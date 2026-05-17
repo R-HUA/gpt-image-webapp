@@ -86,6 +86,7 @@ export interface AppSettings {
   profiles: ApiProfile[]
   activeProfileId: string
   adminServerImagePath?: string
+  backendCodexCli?: boolean
 }
 
 // ===== 任务参数 =====

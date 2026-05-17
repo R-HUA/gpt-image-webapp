@@ -5,6 +5,11 @@ export interface BackendUser {
   role: 'admin' | 'user'
 }
 
+export interface BackendRuntimeSettings {
+  codexCli: boolean
+  serverImagePath?: string
+}
+
 export interface BackendJob {
   id: string
   status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'
@@ -91,6 +96,10 @@ export function login(username: string, password: string) {
 
 export function logout() {
   return api<{ ok: true }>('/api/logout', { method: 'POST' })
+}
+
+export function getRuntimeSettings() {
+  return api<{ settings: BackendRuntimeSettings }>('/api/runtime-settings')
 }
 
 export function createBackendJob(request: {

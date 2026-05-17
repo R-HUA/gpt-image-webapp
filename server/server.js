@@ -217,6 +217,14 @@ function getActiveProfileSnapshot() {
   return structuredClone(store.data.settings.activeProfile || {})
 }
 
+function getRuntimeSettingsForUser(user) {
+  const activeProfile = getActiveProfileSnapshot()
+  return {
+    codexCli: Boolean(activeProfile.codexCli),
+    serverImagePath: user?.role === 'admin' ? store.data.settings.serverImagePath || '' : '',
+  }
+}
+
 function getJobView(job) {
   return {
     id: job.id,
@@ -700,6 +708,12 @@ async function handleApi(req, res, url) {
       })
       return sendJson(res, { settings: store.data.settings })
     }
+  }
+
+  if (url.pathname === '/api/runtime-settings') {
+    const user = requireAuth(req, res)
+    if (!user) return
+    if (req.method === 'GET') return sendJson(res, { settings: getRuntimeSettingsForUser(user) })
   }
 
   if (url.pathname === '/api/admin/api-keys') {

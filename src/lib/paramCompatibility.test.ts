@@ -11,6 +11,15 @@ describe('parameter compatibility', () => {
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 12 }, settings).n).toBe(10)
   })
 
+  it('forces quality auto when backend Codex CLI mode is active', () => {
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      backendCodexCli: true,
+    })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'high' }, settings).quality).toBe('auto')
+  })
+
   it('limits fal.ai output count to 4', () => {
     const falProfile = createDefaultFalProfile({ apiKey: 'fal-key' })
     const settings = normalizeSettings({

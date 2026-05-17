@@ -450,6 +450,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
     profiles,
     activeProfileId,
+    adminServerImagePath: typeof record.adminServerImagePath === 'string' ? record.adminServerImagePath : undefined,
+    backendCodexCli: typeof record.backendCodexCli === 'boolean' ? record.backendCodexCli : false,
   }
 }
 
