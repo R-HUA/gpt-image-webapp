@@ -8,6 +8,8 @@ const MIME_MAP = {
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
+const DEFAULT_USER_AGENT = 'Codex Desktop/0.130.0-alpha.5 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.506.31421)'
+
 export function normalizeDataUrl(value, fallbackMime) {
   return typeof value === 'string' && value.startsWith('data:')
     ? value
@@ -29,7 +31,7 @@ export function bufferToDataUrl(buffer, mime) {
 
 async function readImageUrlAsDataUrl(url, fallbackMime, signal) {
   if (url.startsWith('data:')) return url
-  const res = await fetch(url, { cache: 'no-store', signal })
+  const res = await fetch(url, { cache: 'no-store', signal, headers: { 'User-Agent': DEFAULT_USER_AGENT } })
   if (!res.ok) throw new Error(`图片 URL 下载失败：HTTP ${res.status}`)
   const bytes = Buffer.from(await res.arrayBuffer())
   return bufferToDataUrl(bytes, res.headers.get('content-type') || fallbackMime)
@@ -159,6 +161,7 @@ async function callResponses(profile, request, signal) {
     headers: {
       Authorization: `Bearer ${profile.apiKey}`,
       'Content-Type': 'application/json',
+      'User-Agent': DEFAULT_USER_AGENT,
     },
     body: JSON.stringify(body),
     signal,
@@ -222,7 +225,7 @@ async function callImages(profile, request, signal) {
     const endpoint = buildApiUrl(profile.baseUrl, 'images/edits')
     const res = await fetch(endpoint, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${profile.apiKey}` },
+      headers: { Authorization: `Bearer ${profile.apiKey}`, 'User-Agent': DEFAULT_USER_AGENT },
       body: form,
       signal: compositeSignal,
     })
@@ -258,6 +261,7 @@ async function callImages(profile, request, signal) {
     headers: {
       Authorization: `Bearer ${profile.apiKey}`,
       'Content-Type': 'application/json',
+      'User-Agent': DEFAULT_USER_AGENT,
     },
     body: JSON.stringify(body),
     signal: compositeSignal,
