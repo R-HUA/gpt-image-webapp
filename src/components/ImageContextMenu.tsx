@@ -84,8 +84,8 @@ export default function ImageContextMenu() {
       const src = await getOriginalImageSrc()
       const res = await fetch(src)
       const blob = await res.blob()
-      await copyBlobToClipboard(blob)
-      showToast('图片已复制', 'success')
+      const copyType = await copyBlobToClipboard(blob)
+      showToast(copyType === 'image' ? '图片已复制' : '当前浏览器不支持复制图片，已复制图片 Data URL', 'success')
     } catch (err) {
       console.error(err)
       showToast(getClipboardFailureMessage('复制失败', err), 'error')

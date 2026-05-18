@@ -170,7 +170,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               <label className="block text-xs text-gray-500">上游服务商 Base URL</label>
               <input value={settings.activeProfile.baseUrl || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, baseUrl: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">上游服务商密钥</label>
-              <input value={settings.activeProfile.apiKey || ''} type="password" onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, apiKey: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              <input value={settings.activeProfile.apiKey || ''} type="password" placeholder={settings.activeProfile.apiKeySet ? '已设置，留空不修改' : ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, apiKey: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">模型</label>
               <input value={settings.activeProfile.model || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, model: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">请求模式</label>

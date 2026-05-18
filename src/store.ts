@@ -58,6 +58,7 @@ const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const completedBatchToasts = new Set<string>()
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
+const BACKEND_JOB_POLL_RETRY_MS = 3_000
 
 function createOpenAITimeoutError(timeoutSeconds: number) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。`
@@ -719,7 +720,7 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
+    if (!isRunningOpenAITask(task) || task.customTaskId || task.backendJobId) return task
 
     const updated: TaskRecord = {
       ...task,
@@ -734,6 +735,18 @@ export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Dat
   })
 
   return { tasks: updatedTasks, interruptedTasks }
+}
+
+function isMissingBackendJobError(err: unknown) {
+  return /任务不存在|job not found|not found/i.test(err instanceof Error ? err.message : String(err))
+}
+
+function isBackendJobPollRecoverableError(err: unknown) {
+  return !isMissingBackendJobError(err)
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function clearOpenAIWatchdogTimer(taskId: string) {
@@ -1092,6 +1105,12 @@ export async function initStore() {
     ) {
       scheduleCustomRecovery(task.id, 0)
     }
+    if (
+      task.backendJobId &&
+      (task.status === 'queued' || task.status === 'running')
+    ) {
+      executeTask(task.id)
+    }
   }
 
   // 收集所有任务引用的图片 id
@@ -1284,47 +1303,73 @@ async function executeTask(taskId: string) {
   if (!task) return
 
   try {
-    const inputDataUrls: string[] = []
-    for (const imgId of task.inputImageIds) {
-      const dataUrl = await ensureImageCached(imgId)
-      if (!dataUrl) throw new Error('输入图片已不存在')
-      inputDataUrls.push(dataUrl)
-    }
     let maskDataUrl: string | undefined
-    if (task.maskImageId) {
-      maskDataUrl = await ensureImageCached(task.maskImageId)
-      if (!maskDataUrl) throw new Error('遮罩图片已不存在')
+    let backendJob
+    if (task.backendJobId) {
+      try {
+        backendJob = (await getBackendJob(task.backendJobId)).job
+      } catch (err) {
+        if (isBackendJobPollRecoverableError(err)) {
+          setTimeout(() => executeTask(taskId), BACKEND_JOB_POLL_RETRY_MS)
+          return
+        }
+        throw err
+      }
+      updateTaskInStore(taskId, {
+        status: backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : task.status,
+        queuePosition: backendJob.queuePosition,
+      })
+    } else {
+      const inputDataUrls: string[] = []
+      for (const imgId of task.inputImageIds) {
+        const dataUrl = await ensureImageCached(imgId)
+        if (!dataUrl) throw new Error('输入图片已不存在')
+        inputDataUrls.push(dataUrl)
+      }
+      if (task.maskImageId) {
+        maskDataUrl = await ensureImageCached(task.maskImageId)
+        if (!maskDataUrl) throw new Error('遮罩图片已不存在')
+      }
+
+      const created = await createBackendJob({
+        settings,
+        prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
+        params: task.params,
+        inputImageDataUrls: inputDataUrls,
+        maskDataUrl,
+        batch: Boolean(task.batch),
+        batchCount: task.batchCount,
+        serverImagePath: task.serverImagePath,
+      })
+
+      const latestAfterCreate = useStore.getState().tasks.find((t) => t.id === taskId)
+      if (!latestAfterCreate || latestAfterCreate.status === 'cancelled') {
+        await cancelBackendJob(created.job.id).catch(() => {})
+        return
+      }
+
+      updateTaskInStore(taskId, {
+        backendJobId: created.job.id,
+        status: created.job.status === 'queued' ? 'queued' : 'running',
+        queuePosition: created.job.queuePosition,
+      })
+
+      backendJob = created.job
     }
-
-    const created = await createBackendJob({
-      settings,
-      prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
-      params: task.params,
-      inputImageDataUrls: inputDataUrls,
-      maskDataUrl,
-      batch: Boolean(task.batch),
-      batchCount: task.batchCount,
-      serverImagePath: task.serverImagePath,
-    })
-
-    const latestAfterCreate = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latestAfterCreate || latestAfterCreate.status === 'cancelled') {
-      await cancelBackendJob(created.job.id).catch(() => {})
-      return
-    }
-
-    updateTaskInStore(taskId, {
-      backendJobId: created.job.id,
-      status: created.job.status === 'queued' ? 'queued' : 'running',
-      queuePosition: created.job.queuePosition,
-    })
-
-    let backendJob = created.job
     while (backendJob.status === 'queued' || backendJob.status === 'running') {
-      await new Promise((resolve) => setTimeout(resolve, 1200))
+      await sleep(1200)
       const latest = useStore.getState().tasks.find((t) => t.id === taskId)
       if (!latest || latest.status === 'cancelled') return
-      const polled = await getBackendJob(backendJob.id)
+      let polled
+      try {
+        polled = await getBackendJob(backendJob.id)
+      } catch (err) {
+        if (isBackendJobPollRecoverableError(err)) {
+          await sleep(BACKEND_JOB_POLL_RETRY_MS)
+          continue
+        }
+        throw err
+      }
       backendJob = polled.job
       updateTaskInStore(taskId, {
         status: backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : latest.status,

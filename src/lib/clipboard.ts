@@ -15,14 +15,22 @@ export async function copyTextToClipboard(text: string) {
   throw asyncClipboardError ?? new Error('Clipboard API is not available')
 }
 
-export async function copyBlobToClipboard(blob: Blob) {
+export async function copyBlobToClipboard(blob: Blob): Promise<'image' | 'data-url'> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Clipboard image API is not available')
+    await copyTextToClipboard(await blobToDataUrl(blob))
+    return 'data-url'
   }
 
-  await navigator.clipboard.write([
-    new ClipboardItem({ [blob.type]: blob }),
-  ])
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ [blob.type]: blob }),
+    ])
+    return 'image'
+  } catch (err) {
+    if (isClipboardPermissionError(err)) throw err
+    await copyTextToClipboard(await blobToDataUrl(blob))
+    return 'data-url'
+  }
 }
 
 export function getClipboardFailureMessage(fallback: string, err: unknown) {
@@ -52,6 +60,15 @@ function copyTextWithExecCommand(text: string) {
   } finally {
     document.body.removeChild(textarea)
   }
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 function isEmbeddedPage() {

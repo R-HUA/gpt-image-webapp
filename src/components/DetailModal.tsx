@@ -279,8 +279,8 @@ export default function DetailModal() {
     try {
       const res = await fetch(src)
       const blob = await res.blob()
-      await copyBlobToClipboard(blob)
-      showToast('参考图已复制', 'success')
+      const copyType = await copyBlobToClipboard(blob)
+      showToast(copyType === 'image' ? '参考图已复制' : '当前浏览器不支持复制图片，已复制参考图 Data URL', 'success')
     } catch (err) {
       console.error(err)
       showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')

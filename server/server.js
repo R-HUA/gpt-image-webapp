@@ -229,6 +229,16 @@ function getRuntimeSettingsForUser(user) {
   }
 }
 
+function getAdminSettingsView() {
+  const settings = structuredClone(store.data.settings)
+  if (settings.activeProfile && typeof settings.activeProfile === 'object') {
+    const hasApiKey = Boolean(settings.activeProfile.apiKey)
+    settings.activeProfile.apiKey = ''
+    settings.activeProfile.apiKeySet = hasApiKey
+  }
+  return settings
+}
+
 function getJobView(job) {
   return {
     id: job.id,
@@ -700,13 +710,18 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/admin/settings') {
     const admin = requireAdmin(req, res)
     if (!admin) return
-    if (req.method === 'GET') return sendJson(res, { settings: store.data.settings })
+    if (req.method === 'GET') return sendJson(res, { settings: getAdminSettingsView() })
     if (req.method === 'PATCH') {
       const body = await readJson(req)
       if (body.concurrency != null) store.data.settings.concurrency = Math.max(1, Math.min(20, Number(body.concurrency) || 2))
       if (body.serverImagePath != null) store.data.settings.serverImagePath = String(body.serverImagePath)
       if (body.activeProfile && typeof body.activeProfile === 'object') {
-        store.data.settings.activeProfile = { ...store.data.settings.activeProfile, ...body.activeProfile }
+        const activeProfilePatch = { ...body.activeProfile }
+        if ('apiKey' in activeProfilePatch && !String(activeProfilePatch.apiKey || '').trim()) {
+          delete activeProfilePatch.apiKey
+        }
+        delete activeProfilePatch.apiKeySet
+        store.data.settings.activeProfile = { ...store.data.settings.activeProfile, ...activeProfilePatch }
       }
       await store.save()
       pumpQueue()
@@ -726,7 +741,7 @@ async function handleApi(req, res, url) {
         model: store.data.settings.activeProfile.model,
         hasProviderSecret: Boolean(store.data.settings.activeProfile.apiKey),
       })
-      return sendJson(res, { settings: store.data.settings })
+      return sendJson(res, { settings: getAdminSettingsView() })
     }
   }
 
