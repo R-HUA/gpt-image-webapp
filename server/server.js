@@ -20,6 +20,15 @@ let activeCount = 0
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 const PAGE_SIZE_MAX = 100
 const LOG_COMPONENT = 'gpt-image-backend'
+const REQUEST_BODY_MAX_BYTES = 1024 * 1024 * 512
+
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message)
+    this.name = 'HttpError'
+    this.statusCode = statusCode
+  }
+}
 
 function formatLogValue(value) {
   if (value == null) return ''
@@ -110,9 +119,28 @@ function getCookie(req, name) {
   const cookie = req.headers.cookie || ''
   for (const part of cookie.split(';')) {
     const [key, ...rest] = part.trim().split('=')
-    if (key === name) return decodeURIComponent(rest.join('='))
+    if (key !== name) continue
+    const decoded = safeDecodeURIComponent(rest.join('='))
+    if (decoded != null) return decoded
   }
   return ''
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
+function decodePathParam(res, value, label = '路径参数') {
+  const decoded = safeDecodeURIComponent(value)
+  if (decoded == null) {
+    sendJson(res, { error: `${label}编码无效` }, 400)
+    return null
+  }
+  return decoded
 }
 
 function send(res, status, body, headers = {}) {
@@ -149,11 +177,16 @@ async function readJson(req) {
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > 1024 * 1024 * 512) throw new Error('请求体过大')
+    if (size > REQUEST_BODY_MAX_BYTES) throw new HttpError(413, '请求体过大')
     chunks.push(chunk)
   }
   if (!chunks.length) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch (err) {
+    if (err instanceof SyntaxError) throw new HttpError(400, 'JSON 格式错误')
+    throw err
+  }
 }
 
 function currentSession(req) {
@@ -687,7 +720,8 @@ async function handleApi(req, res, url) {
   if (userMatch) {
     const admin = requireAdmin(req, res)
     if (!admin) return
-    const username = decodeURIComponent(userMatch[1])
+    const username = decodePathParam(res, userMatch[1], '用户名')
+    if (username == null) return
     const user = store.data.users.find((item) => item.username === username)
     if (!user) return sendJson(res, { error: '用户不存在' }, 404)
     if (req.method === 'PATCH') {
@@ -783,10 +817,12 @@ async function handleApi(req, res, url) {
   if (keyMatch) {
     const admin = requireAdmin(req, res)
     if (!admin) return
-    store.data.apiKeys = store.data.apiKeys.filter((key) => key.id !== decodeURIComponent(keyMatch[1]))
+    const keyId = decodePathParam(res, keyMatch[1], '令牌 ID')
+    if (keyId == null) return
+    store.data.apiKeys = store.data.apiKeys.filter((key) => key.id !== keyId)
     await store.save()
-    await addAudit(admin, 'admin.api_key.delete', { keyId: decodeURIComponent(keyMatch[1]) }, req)
-    log('info', 'admin.backend_token.delete', { ...requestLogDetails(req, admin), tokenId: decodeURIComponent(keyMatch[1]) })
+    await addAudit(admin, 'admin.api_key.delete', { keyId }, req)
+    log('info', 'admin.backend_token.delete', { ...requestLogDetails(req, admin), tokenId: keyId })
     return sendJson(res, { ok: true })
   }
 
@@ -819,7 +855,9 @@ async function handleApi(req, res, url) {
   if (batchUploadMatch && req.method === 'DELETE') {
     const admin = requireAdmin(req, res)
     if (!admin) return
-    const upload = store.data.batchUploads.find((item) => item.id === decodeURIComponent(batchUploadMatch[1]))
+    const uploadId = decodePathParam(res, batchUploadMatch[1], '批量上传 ID')
+    if (uploadId == null) return
+    const upload = store.data.batchUploads.find((item) => item.id === uploadId)
     if (!upload) return sendJson(res, { error: '批量上传原图不存在' }, 404)
     if (!upload.deleted) {
       upload.deleted = true
@@ -885,7 +923,9 @@ async function handleApi(req, res, url) {
   if (jobMatch) {
     const user = requireAuth(req, res)
     if (!user) return
-    const job = jobs.get(decodeURIComponent(jobMatch[1]))
+    const jobId = decodePathParam(res, jobMatch[1], '任务 ID')
+    if (jobId == null) return
+    const job = jobs.get(jobId)
     if (!job || (user.role !== 'admin' && job.username !== user.username)) return sendJson(res, { error: '任务不存在' }, 404)
     if (req.method === 'GET') return sendJson(res, { job: getJobView(job) })
     if (req.method === 'DELETE') {
@@ -907,7 +947,9 @@ async function handleApi(req, res, url) {
   if (galleryImageMatch) {
     const user = requireAuth(req, res)
     if (!user) return
-    const record = store.data.results.find((item) => item.id === decodeURIComponent(galleryImageMatch[1]))
+    const resultId = decodePathParam(res, galleryImageMatch[1], '图片 ID')
+    if (resultId == null) return
+    const record = store.data.results.find((item) => item.id === resultId)
     if (!record || (user.role !== 'admin' && (record.username !== user.username || record.deleted))) return sendJson(res, { error: '图片不存在' }, 404)
     return sendFile(res, galleryImageMatch[2] === 'thumbnail' ? record.thumbnailPath : record.outputPath, true)
   }
@@ -916,7 +958,9 @@ async function handleApi(req, res, url) {
   if (galleryDeleteMatch && req.method === 'DELETE') {
     const admin = requireAdmin(req, res)
     if (!admin) return
-    const record = store.data.results.find((item) => item.id === decodeURIComponent(galleryDeleteMatch[1]))
+    const resultId = decodePathParam(res, galleryDeleteMatch[1], '记录 ID')
+    if (resultId == null) return
+    const record = store.data.results.find((item) => item.id === resultId)
     if (!record) return sendJson(res, { error: '记录不存在' }, 404)
     record.deleted = true
     record.deletedAt = Date.now()
@@ -940,7 +984,8 @@ async function handleRequest(req, res) {
       return
     }
 
-    const requested = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)
+    const requested = safeDecodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)
+    if (requested == null) return sendJson(res, { error: '路径编码无效' }, 400)
     const candidate = path.resolve(distDir, `.${requested}`)
     if (candidate.startsWith(distDir)) {
       try {
@@ -951,7 +996,8 @@ async function handleRequest(req, res) {
     return sendFile(res, path.join(distDir, 'index.html'))
   } catch (err) {
     logError('http.request.failed', err, { method: req.method, url: req.url, durationMs: Date.now() - requestStartedAt })
-    sendJson(res, { error: err instanceof Error ? err.message : String(err) }, 500)
+    const statusCode = Number(err?.statusCode || 500)
+    sendJson(res, { error: err instanceof Error ? err.message : String(err) }, statusCode)
   }
 }
 
