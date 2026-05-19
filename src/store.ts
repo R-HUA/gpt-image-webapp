@@ -31,6 +31,7 @@ import {
   storeImage,
 } from './lib/db'
 import { cancelBackendJob, createBackendJob, getBackendJob } from './lib/backend'
+import type { BackendJob, BackendJobResult } from './lib/backend'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -781,7 +782,7 @@ async function fetchBackendResultImage(record: { outputUrl: string }) {
   return blobToDataUrl(await response.blob())
 }
 
-async function getBackendResultImages(result: NonNullable<import('./lib/backend').BackendJobResult>) {
+async function getBackendResultImages(result: NonNullable<BackendJobResult>) {
   if (result.images?.length) return result.images
   if (result.records?.length) {
     return Promise.all(result.records.map(fetchBackendResultImage))
@@ -1147,7 +1148,7 @@ export async function initStore() {
     }
     if (
       task.backendJobId &&
-      (task.status === 'queued' || task.status === 'running')
+      (task.status === 'queued' || task.status === 'running' || task.backendRecoverable)
     ) {
       executeTask(task.id)
     }
@@ -1281,51 +1282,55 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     await storeImage(img.dataUrl)
   }
 
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 || serverImageBatchMode })
+  const submittedParams = (batchMode || serverImageBatchMode)
+    ? { ...normalizedParams, n: 1 }
+    : normalizedParams
   const normalizedParamPatch = getChangedParams(params, normalizedParams)
+  if (batchMode || serverImageBatchMode) {
+    delete (normalizedParamPatch as Partial<TaskParams>).n
+  }
   if (Object.keys(normalizedParamPatch).length) {
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskInputGroups = serverImageBatchMode
-    ? [[] as InputImage[]]
-    : batchMode
-    ? orderedInputImages.length > 0
-      ? orderedInputImages.map((img) => [img])
-      : Array.from({ length: batchCount }, () => [] as InputImage[])
-    : [orderedInputImages]
-  const batchTotal = taskInputGroups.length
-  const batchId = (batchMode || serverImageBatchMode) && batchTotal > 1 ? genId() : undefined
+  const isBatchTask = batchMode || serverImageBatchMode
+  const submittedBatchCount = isBatchTask && !serverImageBatchMode && orderedInputImages.length === 0 ? batchCount : undefined
+  const batchTotal = isBatchTask
+    ? serverImageBatchMode
+      ? undefined
+      : orderedInputImages.length > 0
+      ? orderedInputImages.length
+      : batchCount
+    : undefined
   const createdAt = Date.now()
-  const tasks = taskInputGroups.map((group, index): TaskRecord => ({
+  const task: TaskRecord = {
     id: genId(),
     prompt: prompt.trim(),
-    params: normalizedParams,
+    params: submittedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiModel: activeProfile.model,
-    inputImageIds: group.map((i) => i.id),
+    inputImageIds: serverImageBatchMode ? [] : orderedInputImages.map((i) => i.id),
     maskTargetImageId,
     maskImageId,
     outputImages: [],
     status: 'queued',
     error: null,
-    createdAt: createdAt + index,
+    createdAt,
     finishedAt: null,
     elapsed: null,
-    batch: batchMode,
-    batchId,
-    batchCount: batchMode && orderedInputImages.length === 0 ? 1 : undefined,
-    batchIndex: batchMode || serverImageBatchMode ? index + 1 : undefined,
-    batchTotal: batchMode || serverImageBatchMode ? batchTotal : undefined,
+    batch: isBatchTask,
+    batchCount: submittedBatchCount,
+    batchTotal,
     serverImagePath: serverImageBatchMode ? serverImagePath : undefined,
     queuePosition: 0,
-  }))
+  }
 
   const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([...tasks, ...latestTasks])
-  await Promise.all(tasks.map((task) => putTask(task)))
+  useStore.getState().setTasks([task, ...latestTasks])
+  await putTask(task)
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1334,17 +1339,17 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   useStore.getState().setReusedTaskApiProfile(null)
 
   // 异步调用 API
-  for (const task of tasks) executeTask(task.id)
+  executeTask(task.id)
 }
 
 async function executeTask(taskId: string) {
-  const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
 
+  let syncRecoverableBackendJobId: string | null = null
   try {
     let maskDataUrl: string | undefined
-    let backendJob
+    let backendJob: BackendJob
     if (task.backendJobId) {
       try {
         backendJob = (await getBackendJob(task.backendJobId)).job
@@ -1356,8 +1361,14 @@ async function executeTask(taskId: string) {
         throw err
       }
       updateTaskInStore(taskId, {
-        status: backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : task.status,
+        status: backendJob.status === 'queued'
+          ? 'queued'
+          : backendJob.status === 'running' || (backendJob.status === 'done' && task.backendRecoverable)
+          ? 'running'
+          : task.status,
         queuePosition: backendJob.queuePosition,
+        backendProgress: backendJob.progress || undefined,
+        backendRecoverable: false,
       })
     } else {
       const inputDataUrls: string[] = []
@@ -1372,7 +1383,6 @@ async function executeTask(taskId: string) {
       }
 
       const created = await createBackendJob({
-        settings,
         prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
         params: task.params,
         inputImageDataUrls: inputDataUrls,
@@ -1392,6 +1402,8 @@ async function executeTask(taskId: string) {
         backendJobId: created.job.id,
         status: created.job.status === 'queued' ? 'queued' : 'running',
         queuePosition: created.job.queuePosition,
+        backendProgress: created.job.progress || undefined,
+        backendRecoverable: false,
       })
 
       backendJob = created.job
@@ -1414,6 +1426,8 @@ async function executeTask(taskId: string) {
       updateTaskInStore(taskId, {
         status: backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : latest.status,
         queuePosition: backendJob.queuePosition,
+        backendProgress: backendJob.progress || undefined,
+        backendRecoverable: false,
       })
     }
 
@@ -1423,6 +1437,8 @@ async function executeTask(taskId: string) {
         error: backendJob.error || '请求已取消',
         finishedAt: backendJob.finishedAt ?? Date.now(),
         elapsed: Date.now() - task.createdAt,
+        backendProgress: backendJob.progress || undefined,
+        backendRecoverable: false,
       })
       return
     }
@@ -1433,6 +1449,7 @@ async function executeTask(taskId: string) {
 
     const result = backendJob.result
 
+    syncRecoverableBackendJobId = backendJob.id
     const resultImages = await getBackendResultImages(result)
     const outputIds: string[] = []
     for (const dataUrl of resultImages) {
@@ -1451,7 +1468,8 @@ async function executeTask(taskId: string) {
     }, {}) : undefined
 
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latestBeforeUpdate || (latestBeforeUpdate.status !== 'running' && latestBeforeUpdate.status !== 'queued')) return
+    if (!latestBeforeUpdate || (latestBeforeUpdate.status !== 'running' && latestBeforeUpdate.status !== 'queued' && !latestBeforeUpdate.backendRecoverable)) return
+    syncRecoverableBackendJobId = null
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
@@ -1466,6 +1484,8 @@ async function executeTask(taskId: string) {
       elapsed: (backendJob.finishedAt ?? Date.now()) - task.createdAt,
       falRecoverable: false,
       customRecoverable: false,
+      backendRecoverable: false,
+      backendProgress: undefined,
       queuePosition: 0,
     })
     if (!maybeShowBatchCompletionToast(task)) {
@@ -1486,13 +1506,18 @@ async function executeTask(taskId: string) {
     }
   } catch (err) {
     const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
-    if (latestTask.status !== 'running' && latestTask.status !== 'queued') return
+    if (latestTask.status !== 'running' && latestTask.status !== 'queued' && !latestTask.backendRecoverable) return
+    const canResyncBackendJob = Boolean(syncRecoverableBackendJobId)
     updateTaskInStore(taskId, {
       status: 'error',
-      error: err instanceof Error ? err.message : String(err),
+      error: canResyncBackendJob
+        ? `后端任务已完成，但同步结果失败：${err instanceof Error ? err.message : String(err)}`
+        : err instanceof Error ? err.message : String(err),
       ...getRawErrorPayload(err),
       falRecoverable: false,
       customRecoverable: false,
+      backendJobId: syncRecoverableBackendJobId || latestTask.backendJobId,
+      backendRecoverable: canResyncBackendJob,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
     })
@@ -1537,6 +1562,19 @@ export async function cancelQueuedTask(task: TaskRecord) {
 
 /** 重试失败的任务：创建新任务并执行 */
 export async function retryTask(task: TaskRecord) {
+  if (task.backendRecoverable && task.backendJobId) {
+    updateTaskInStore(task.id, {
+      status: 'running',
+      error: null,
+      backendRecoverable: false,
+      finishedAt: null,
+      elapsed: null,
+      queuePosition: 0,
+    })
+    executeTask(task.id)
+    return
+  }
+
   const { settings } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
   const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
@@ -1565,6 +1603,8 @@ export async function retryTask(task: TaskRecord) {
     batchTotal: undefined,
     serverImagePath: undefined,
     queuePosition: 0,
+    backendProgress: undefined,
+    backendRecoverable: false,
   }
 
   const latestTasks = useStore.getState().tasks

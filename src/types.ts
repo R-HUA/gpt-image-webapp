@@ -128,6 +128,13 @@ export interface MaskDraft {
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
+export interface BackendJobProgress {
+  total: number
+  completed: number
+  failed: number
+  current?: number | null
+}
+
 export interface TaskRecord {
   id: string
   prompt: string
@@ -154,6 +161,10 @@ export interface TaskRecord {
   backendJobId?: string
   /** 后端队列位置 */
   queuePosition?: number
+  /** 后端批量 job 的子请求进度 */
+  backendProgress?: BackendJobProgress
+  /** 后端 job 已完成但本地结果同步失败，可重试同步同一个 job */
+  backendRecoverable?: boolean
   /** 批量任务标记 */
   batch?: boolean
   batchId?: string

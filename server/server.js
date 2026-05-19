@@ -284,6 +284,7 @@ function getJobView(job) {
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     error: job.error,
+    progress: job.progress || null,
     result,
   }
 }
@@ -462,6 +463,9 @@ async function runJob(job) {
     let requests = [job.request]
     if (job.request.serverImagePath) {
       const files = await listServerImages(job.request.serverImagePath)
+      if (files.length > 200) {
+        throw new Error(`服务器图片目录最多支持 200 张图片，当前为 ${files.length} 张`)
+      }
       log('info', 'job.server_images.listed', { jobId: job.id, dir: job.request.serverImagePath, count: files.length })
       requests = await Promise.all(files.map(async (filePath) => ({
         ...job.request,
@@ -497,6 +501,7 @@ async function runJob(job) {
     }
 
     if (job.request.batch) await persistBatchUploads(job, job.request.inputImageDataUrls || [])
+    job.progress = { total: requests.length, completed: 0, failed: 0, current: requests.length ? 1 : null }
     log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length, codexCliSplitCount })
 
     const allImages = []
@@ -507,6 +512,7 @@ async function runJob(job) {
     for (let i = 0; i < requests.length; i++) {
       const request = requests[i]
       const requestStartedAt = Date.now()
+      job.progress.current = i + 1
       log('info', 'provider.request.started', {
         jobId: job.id,
         requestIndex: i + 1,
@@ -532,9 +538,11 @@ async function runJob(job) {
         actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
         revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
         rawImageUrls.push(...(result.rawImageUrls || []))
+        job.progress.completed += 1
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         requestErrors.push({ requestIndex: i + 1, message })
+        job.progress.failed += 1
         logError('provider.request.failed', err, {
           jobId: job.id,
           requestIndex: i + 1,
@@ -553,6 +561,7 @@ async function runJob(job) {
           throw err
         }
       }
+      job.progress.current = i + 1 < requests.length ? i + 2 : null
     }
 
     const result = {
@@ -570,6 +579,7 @@ async function runJob(job) {
     const records = await persistResult(job, result)
     job.status = 'done'
     job.finishedAt = Date.now()
+    if (job.progress) job.progress.current = null
     job.result = {
       ...result,
       records: records.map((record) => ({
@@ -590,6 +600,7 @@ async function runJob(job) {
     job.status = job.status === 'cancelled' ? 'cancelled' : 'error'
     job.error = err?.name === 'AbortError' ? '请求已取消' : err instanceof Error ? err.message : String(err)
     job.finishedAt = Date.now()
+    if (job.progress) job.progress.current = null
     logError('job.failed', err, {
       jobId: job.id,
       username: job.username,
@@ -888,6 +899,7 @@ async function handleApi(req, res, url) {
       startedAt: null,
       finishedAt: null,
       error: null,
+      progress: null,
       request: body,
       activeProfile: getActiveProfileSnapshot(),
       result: null,

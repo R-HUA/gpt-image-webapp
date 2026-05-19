@@ -1600,33 +1600,35 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
           text={isFalProvider ? 'fal.ai 不支持审核参数' : 'Responses API 不支持审核参数'}
         />
       </label>
-      <label className="relative flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
-        <input
-          value={nInput}
-          onChange={(e) => handleNInputChange(e.target.value)}
-          onFocus={() => setNInputFocused(true)}
-          onBlur={() => {
-            setNInputFocused(false)
-            commitN()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowUp') {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          onWheel={(e) => {
-            if (e.deltaY < 0) {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          type="number"
-          min={1}
-          max={outputImageLimit}
-          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
-        />
-        <ButtonTooltip visible={nLimitHintVisible} text={nLimitHintText} />
-      </label>
+      {!batchMode && (
+        <label className="relative flex flex-col gap-0.5">
+          <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
+          <input
+            value={nInput}
+            onChange={(e) => handleNInputChange(e.target.value)}
+            onFocus={() => setNInputFocused(true)}
+            onBlur={() => {
+              setNInputFocused(false)
+              commitN()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp') {
+                handleNLimitIncreaseAttempt(() => e.preventDefault())
+              }
+            }}
+            onWheel={(e) => {
+              if (e.deltaY < 0) {
+                handleNLimitIncreaseAttempt(() => e.preventDefault())
+              }
+            }}
+            type="number"
+            min={1}
+            max={outputImageLimit}
+            className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
+          />
+          <ButtonTooltip visible={nLimitHintVisible} text={nLimitHintText} />
+        </label>
+      )}
     </div>
   )
 
@@ -1866,7 +1868,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                       >
                         批量模式
                       </button>
-                      {batchMode && inputImages.length === 0 && (
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && (
                         <label className="flex items-center gap-1">
                           <span>批量数</span>
                           <input
@@ -1879,7 +1881,9 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                           />
                         </label>
                       )}
-                      {batchMode && inputImages.length > 0 && <span>{inputImages.length} 张图片将拆成 {inputImages.length} 笔请求</span>}
+                      {batchMode && serverImageBatchMode && <span>作为 1 个批量任务提交，后端按目录图片展开子请求</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length > 0 && <span>作为 1 个批量任务提交，包含 {inputImages.length} 个子请求</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && <span>作为 1 个批量任务提交，包含 {batchCount} 个子请求</span>}
                       {user?.role === 'admin' && (
                         <button
                           type="button"
@@ -1959,7 +1963,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                     >
                       批量模式
                     </button>
-                    {batchMode && inputImages.length === 0 && (
+                    {batchMode && !serverImageBatchMode && inputImages.length === 0 && (
                       <input
                         value={batchCount}
                         onChange={(e) => setBatchCount(Number(e.target.value))}
@@ -1987,7 +1991,15 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                       </button>
                     )}
                   </div>
-                  {serverImageBatchMode && <div className="mb-2 truncate text-xs text-emerald-600 dark:text-emerald-300">使用目录：{adminServerImagePath}</div>}
+                  {batchMode && (
+                    <div className="mb-2 truncate text-xs text-gray-500 dark:text-gray-400">
+                      {serverImageBatchMode
+                        ? `作为 1 个批量任务提交，后端按目录图片展开子请求${adminServerImagePath ? ` · ${adminServerImagePath}` : ''}`
+                        : inputImages.length > 0
+                        ? `作为 1 个批量任务提交，包含 ${inputImages.length} 个子请求`
+                        : `作为 1 个批量任务提交，包含 ${batchCount} 个子请求`}
+                    </div>
+                  )}
                   {renderParams('grid-cols-2')}
                   <div className="h-2" />
                 </div>

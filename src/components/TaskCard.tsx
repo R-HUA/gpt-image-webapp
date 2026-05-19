@@ -188,6 +188,9 @@ export default function TaskCard({
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
+  const backendProgress = task.backendProgress
+  const backendProcessed = backendProgress ? Math.min(backendProgress.total, backendProgress.completed + backendProgress.failed) : 0
+  const backendProgressLabel = backendProgress && backendProgress.total > 1 ? `${backendProcessed}/${backendProgress.total}` : ''
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -309,7 +312,7 @@ export default function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">
-                生成中...
+                {backendProgressLabel ? `生成中 ${backendProgressLabel}` : '生成中...'}
               </span>
             </div>
           )}

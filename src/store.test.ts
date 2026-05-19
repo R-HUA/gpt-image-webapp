@@ -63,6 +63,7 @@ vi.mock('./lib/backend', () => ({
         startedAt: Date.now(),
         finishedAt: Date.now(),
         error: null,
+        progress: null,
         result: {
           images: [],
           actualParams: { n: 0 },
@@ -77,7 +78,7 @@ vi.mock('./lib/backend', () => ({
   getBackendJob: vi.fn(),
   cancelBackendJob: vi.fn(),
 }))
-import { clearImages, putImage, putTask } from './lib/db'
+import { clearImages, clearTasks, putImage, putTask } from './lib/db'
 import { editOutputs, getPersistedState, getTaskApiProfile, initStore, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
@@ -109,8 +110,11 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 }
 
 describe('mask draft lifecycle in store actions', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     backendJobs.length = 0
+    getBackendJobMock.mockReset()
+    await clearTasks()
+    await clearImages()
     useStore.setState({
       settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
       prompt: 'prompt',
@@ -164,47 +168,63 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().maskDraft).toBeNull()
   })
 
-  it('splits uploaded batch images into separate frontend tasks and backend jobs', async () => {
+  it('submits uploaded batch images as one frontend task and one backend job', async () => {
     await putImage(imageA)
     await putImage(imageB)
     useStore.setState({
       batchMode: true,
       inputImages: [imageA, imageB],
+      params: { ...DEFAULT_PARAMS, n: 3 },
     })
 
     await submitTask()
     await flushAsyncTasks()
 
     const state = useStore.getState()
-    expect(state.tasks).toHaveLength(2)
-    expect(state.tasks.map((item) => item.inputImageIds)).toEqual([[imageA.id], [imageB.id]])
-    expect(state.tasks.map((item) => [item.batchIndex, item.batchTotal])).toEqual([[1, 2], [2, 2]])
-    expect(state.tasks[0].batchId).toBeTruthy()
-    expect(state.tasks[1].batchId).toBe(state.tasks[0].batchId)
-    expect(backendJobs).toHaveLength(2)
-    expect(backendJobs.map((job) => job.inputImageDataUrls.length)).toEqual([1, 1])
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0].inputImageIds).toEqual([imageA.id, imageB.id])
+    expect(state.tasks[0].batchId).toBeUndefined()
+    expect(state.tasks[0].batchIndex).toBeUndefined()
+    expect(state.tasks[0].batchTotal).toBe(2)
+    expect(state.tasks[0].params.n).toBe(1)
+    expect(state.params.n).toBe(3)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      params: expect.objectContaining({ n: 1 }),
+    })
+    expect(backendJobs[0].settings).toBeUndefined()
+    expect(backendJobs[0].inputImageDataUrls).toHaveLength(2)
+    expect(backendJobs[0].batchCount).toBeUndefined()
   })
 
-  it('assigns distinct ids to separate batches with the same size', async () => {
+  it('submits no-image batch count to one backend job without changing global n', async () => {
     useStore.setState({
       batchMode: true,
       batchCount: 2,
       inputImages: [],
+      params: { ...DEFAULT_PARAMS, n: 4 },
     })
 
-    await submitTask()
     await submitTask()
     await flushAsyncTasks()
 
     const state = useStore.getState()
-    expect(state.tasks).toHaveLength(4)
-    const newestBatchId = state.tasks[0].batchId
-    const olderBatchId = state.tasks[2].batchId
-    expect(newestBatchId).toBeTruthy()
-    expect(olderBatchId).toBeTruthy()
-    expect(state.tasks[1].batchId).toBe(newestBatchId)
-    expect(state.tasks[3].batchId).toBe(olderBatchId)
-    expect(newestBatchId).not.toBe(olderBatchId)
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0]).toMatchObject({
+      batch: true,
+      batchCount: 2,
+      batchTotal: 2,
+      params: expect.objectContaining({ n: 1 }),
+    })
+    expect(state.params.n).toBe(4)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      batchCount: 2,
+      params: expect.objectContaining({ n: 1 }),
+      inputImageDataUrls: [],
+    })
   })
 
   it('retries a batch child as an independent task', async () => {
@@ -269,6 +289,7 @@ describe('mask draft lifecycle in store actions', () => {
           startedAt: 1_100,
           finishedAt: 2_000,
           error: null,
+          progress: null,
           result: {
             images: [],
             actualParams: { n: 1 },
@@ -299,6 +320,144 @@ describe('mask draft lifecycle in store actions', () => {
     } finally {
       globalThis.fetch = originalFetch
       vi.unstubAllGlobals()
+    }
+  })
+
+  it('syncs backend progress while polling a restored batch job', async () => {
+    vi.useFakeTimers()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+    try {
+      const runningTask = task({
+        id: 'restored-progress-job',
+        status: 'running',
+        backendJobId: 'backend-job-progress',
+        createdAt: 1_000,
+        finishedAt: null,
+        elapsed: null,
+      })
+      getBackendJobMock
+        .mockResolvedValueOnce({
+          job: {
+            id: 'backend-job-progress',
+            status: 'running',
+            queuePosition: 0,
+            createdAt: 1_000,
+            startedAt: 1_100,
+            finishedAt: null,
+            error: null,
+            progress: { total: 3, completed: 1, failed: 0, current: 2 },
+            result: null,
+          },
+        })
+        .mockResolvedValueOnce({
+          job: {
+            id: 'backend-job-progress',
+            status: 'done',
+            queuePosition: 0,
+            createdAt: 1_000,
+            startedAt: 1_100,
+            finishedAt: 2_000,
+            error: null,
+            progress: { total: 3, completed: 3, failed: 0, current: null },
+            result: {
+              images: [],
+              actualParams: { n: 1 },
+              actualParamsList: [{ n: 1 }],
+              revisedPrompts: [],
+              rawImageUrls: [],
+              records: [{ id: 'record-progress', outputUrl: '/api/gallery/record-progress/image', thumbnailUrl: '/api/gallery/record-progress/thumbnail' }],
+            },
+          },
+        })
+      await putTask(runningTask)
+      useStore.setState({ tasks: [runningTask] })
+
+      await initStore()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(useStore.getState().tasks.find((item) => item.id === runningTask.id)?.backendProgress).toEqual({
+        total: 3,
+        completed: 1,
+        failed: 0,
+        current: 2,
+      })
+
+      await vi.advanceTimersByTimeAsync(1200)
+      await Promise.resolve()
+
+      expect(useStore.getState().tasks.find((item) => item.id === runningTask.id)).toMatchObject({
+        status: 'done',
+        backendProgress: undefined,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      vi.useRealTimers()
+    }
+  })
+
+  it('marks completed backend jobs recoverable when local result sync fails and retries the same job', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn()
+    fetchMock
+      .mockResolvedValueOnce(new Response('failed', { status: 500 }))
+      .mockResolvedValueOnce(new Response(new Blob(['image-bytes'], { type: 'image/png' })))
+    globalThis.fetch = fetchMock as typeof fetch
+    try {
+      const runningTask = task({
+        id: 'recoverable-backend-job',
+        status: 'running',
+        backendJobId: 'backend-job-recoverable',
+        createdAt: 1_000,
+        finishedAt: null,
+        elapsed: null,
+      })
+      const doneJob = {
+        id: 'backend-job-recoverable',
+        status: 'done' as const,
+        queuePosition: 0,
+        createdAt: 1_000,
+        startedAt: 1_100,
+        finishedAt: 2_000,
+        error: null,
+        progress: { total: 1, completed: 1, failed: 0, current: null },
+        result: {
+          images: [],
+          actualParams: { n: 1 },
+          actualParamsList: [{ n: 1 }],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          records: [{ id: 'record-recoverable', outputUrl: '/api/gallery/record-recoverable/image', thumbnailUrl: '/api/gallery/record-recoverable/thumbnail' }],
+        },
+      }
+      getBackendJobMock.mockResolvedValueOnce({ job: doneJob })
+      await putTask(runningTask)
+      useStore.setState({ tasks: [runningTask] })
+
+      await initStore()
+      await flushAsyncTasks()
+
+      const failedSync = useStore.getState().tasks.find((item) => item.id === runningTask.id)
+      expect(failedSync).toMatchObject({
+        status: 'error',
+        backendJobId: 'backend-job-recoverable',
+        backendRecoverable: true,
+      })
+
+      getBackendJobMock.mockResolvedValueOnce({ job: doneJob })
+      await retryTask(failedSync!)
+      await flushAsyncTasks()
+
+      expect(useStore.getState().tasks.find((item) => item.id === runningTask.id)).toMatchObject({
+        status: 'done',
+        backendJobId: 'backend-job-recoverable',
+        backendRecoverable: false,
+        outputImages: [expect.stringMatching(/^stored-image-\d+$/)],
+      })
+      expect(backendJobs).toHaveLength(0)
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 

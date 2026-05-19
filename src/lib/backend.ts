@@ -1,4 +1,4 @@
-import type { AppSettings, TaskParams } from '../types'
+import type { BackendJobProgress, TaskParams } from '../types'
 
 export interface BackendUser {
   username: string
@@ -18,6 +18,7 @@ export interface BackendJob {
   startedAt: number | null
   finishedAt: number | null
   error: string | null
+  progress: BackendJobProgress | null
   result?: BackendJobResult | null
 }
 
@@ -110,7 +111,6 @@ export function getRuntimeSettings() {
 }
 
 export function createBackendJob(request: {
-  settings: AppSettings
   prompt: string
   params: TaskParams
   inputImageDataUrls: string[]

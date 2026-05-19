@@ -194,6 +194,11 @@ export default function DetailModal() {
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const backendProgress = task.backendProgress
+  const backendProcessed = backendProgress ? Math.min(backendProgress.total, backendProgress.completed + backendProgress.failed) : 0
+  const backendProgressText = backendProgress && backendProgress.total > 1
+    ? `生成中 ${backendProcessed}/${backendProgress.total}${backendProgress.failed ? `，失败 ${backendProgress.failed}` : ''}`
+    : ''
   const rawImageUrls = task.rawImageUrls ?? []
 
   const formatTime = (ts: number | null) => {
@@ -415,7 +420,7 @@ export default function DetailModal() {
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                   <div className="text-sm text-gray-400">
-                    {task.status === 'queued' ? `排队中${task.queuePosition ? ` #${task.queuePosition}` : ''}` : '生成中...'}
+                    {task.status === 'queued' ? `排队中${task.queuePosition ? ` #${task.queuePosition}` : ''}` : backendProgressText || '生成中...'}
                   </div>
                   {task.status === 'queued' && (
                     <button onClick={() => cancelQueuedTask(task)} className="rounded-full bg-red-500 px-4 py-1.5 text-sm text-white">
@@ -635,6 +640,19 @@ export default function DetailModal() {
                     )
                   })}
                 </div>
+              </div>
+            )}
+
+            {task.partialFailure && (
+              <div className="mb-4 rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+                <div className="font-medium">部分完成，失败 {task.failedCount || task.requestErrors?.length || 0} 个子请求</div>
+                {task.requestErrors?.length ? (
+                  <ul className="mt-1 space-y-1">
+                    {task.requestErrors.slice(0, 5).map((item) => (
+                      <li key={item.requestIndex}>#{item.requestIndex}: {item.message}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             )}
 
