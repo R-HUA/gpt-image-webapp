@@ -77,11 +77,12 @@ vi.mock('./lib/backend', () => ({
   getBackendJob: vi.fn(),
   cancelBackendJob: vi.fn(),
 }))
-import { clearImages, putImage } from './lib/db'
-import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
+import { clearImages, putImage, putTask } from './lib/db'
+import { editOutputs, getPersistedState, getTaskApiProfile, initStore, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
+const getBackendJobMock = vi.mocked((await import('./lib/backend')).getBackendJob)
 
 async function flushAsyncTasks() {
   await Promise.resolve()
@@ -244,6 +245,61 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().tasks[0].serverImagePath).toBe('/input-images')
     expect(backendJobs).toHaveLength(1)
     expect(backendJobs[0].serverImagePath).toBe('/input-images')
+  })
+
+  it('finishes a restored backend job from persisted gallery records', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+    vi.stubGlobal('window', {})
+    try {
+      const runningTask = task({
+        id: 'restored-backend-job',
+        status: 'running',
+        backendJobId: 'backend-job-restored',
+        createdAt: 1_000,
+        finishedAt: null,
+        elapsed: null,
+      })
+      getBackendJobMock.mockResolvedValueOnce({
+        job: {
+          id: 'backend-job-restored',
+          status: 'done',
+          queuePosition: 0,
+          createdAt: 1_000,
+          startedAt: 1_100,
+          finishedAt: 2_000,
+          error: null,
+          result: {
+            images: [],
+            actualParams: { n: 1 },
+            actualParamsList: [{ n: 1 }],
+            revisedPrompts: [],
+            rawImageUrls: [],
+            records: [{ id: 'record-1', outputUrl: '/api/gallery/record-1/image', thumbnailUrl: '/api/gallery/record-1/thumbnail' }],
+          },
+        },
+      })
+      await putTask(runningTask)
+      useStore.setState({ tasks: [runningTask] })
+
+      await initStore()
+      await flushAsyncTasks()
+
+      const completed = useStore.getState().tasks.find((item) => item.id === runningTask.id)
+      expect(completed).toMatchObject({
+        status: 'done',
+        outputImages: [expect.stringMatching(/^stored-image-\d+$/)],
+        finishedAt: 2_000,
+        queuePosition: 0,
+      })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/gallery/record-1/image', {
+        credentials: 'include',
+        cache: 'no-store',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      vi.unstubAllGlobals()
+    }
   })
 
   it('preserves selected image mentions when replacing a mask target with an equivalent image id', () => {

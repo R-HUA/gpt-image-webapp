@@ -240,6 +240,9 @@ function getAdminSettingsView() {
 }
 
 function getJobView(job) {
+  const result = job.result && Array.isArray(job.result.records) && job.result.records.length
+    ? { ...job.result, images: [] }
+    : job.result
   return {
     id: job.id,
     status: job.status,
@@ -248,7 +251,7 @@ function getJobView(job) {
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     error: job.error,
-    result: job.result,
+    result,
   }
 }
 

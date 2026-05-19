@@ -742,11 +742,51 @@ function isMissingBackendJobError(err: unknown) {
 }
 
 function isBackendJobPollRecoverableError(err: unknown) {
-  return !isMissingBackendJobError(err)
+  if (isMissingBackendJobError(err)) return false
+  const status = err && typeof err === 'object' && 'status' in err
+    ? Number((err as { status?: unknown }).status)
+    : 0
+  if (status) return status === 502 || status === 503 || status === 504
+  return isApiRequestNetworkError(err)
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  return blob.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+    return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`
+  })
+}
+
+async function fetchBackendResultImage(record: { outputUrl: string }) {
+  const response = await fetch(record.outputUrl, {
+    credentials: 'include',
+    cache: 'no-store',
+  })
+  if (!response.ok) throw new Error(`读取后端结果图片失败：HTTP ${response.status}`)
+  return blobToDataUrl(await response.blob())
+}
+
+async function getBackendResultImages(result: NonNullable<import('./lib/backend').BackendJobResult>) {
+  if (result.images?.length) return result.images
+  if (result.records?.length) {
+    return Promise.all(result.records.map(fetchBackendResultImage))
+  }
+  return []
 }
 
 function clearOpenAIWatchdogTimer(taskId: string) {
@@ -1393,8 +1433,9 @@ async function executeTask(taskId: string) {
 
     const result = backendJob.result
 
+    const resultImages = await getBackendResultImages(result)
     const outputIds: string[] = []
-    for (const dataUrl of result.images) {
+    for (const dataUrl of resultImages) {
       const imgId = await storeImage(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
       outputIds.push(imgId)
@@ -2038,11 +2079,3 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}

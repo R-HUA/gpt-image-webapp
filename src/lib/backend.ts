@@ -82,7 +82,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   const payload = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const error = new Error(payload.error || `HTTP ${res.status}`)
+    ;(error as Error & { status?: number }).status = res.status
+    throw error
+  }
   return payload as T
 }
 
