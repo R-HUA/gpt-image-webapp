@@ -15,12 +15,14 @@ const store = new JsonStore(path.resolve(rootDir, serverConfig.dataDir, 'db.json
 const sessions = new Map()
 const jobs = new Map()
 const queue = []
+const pendingUploads = new Map()
 let activeCount = 0
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 const PAGE_SIZE_MAX = 100
 const LOG_COMPONENT = 'gpt-image-backend'
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024 * 512
+const UPLOAD_BODY_MAX_BYTES = 1024 * 1024 * 64
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -189,6 +191,17 @@ async function readJson(req) {
   }
 }
 
+async function readRawBody(req, maxBytes = UPLOAD_BODY_MAX_BYTES) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > maxBytes) throw new HttpError(413, '上传图片过大')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 function currentSession(req) {
   const token = getCookie(req, 'gip_session')
   const session = token ? sessions.get(token) : null
@@ -298,6 +311,15 @@ async function saveDataUrl(dataUrl, dir, basename) {
   return { filePath, ext, mime, size: buffer.length }
 }
 
+async function saveUploadBuffer(buffer, mime, dir, basename) {
+  const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png'
+  await fs.mkdir(dir, { recursive: true })
+  const filePath = path.join(dir, `${basename}.${ext}`)
+  await fs.writeFile(filePath, buffer)
+  log('info', 'upload.saved', { filePath, mime, bytes: buffer.length })
+  return { filePath, ext, mime, size: buffer.length }
+}
+
 async function makeThumbnail(sourcePath, targetPath) {
   await fs.mkdir(path.dirname(targetPath), { recursive: true })
   const webpPath = targetPath.replace(/\.[^.]+$/, '.webp')
@@ -333,6 +355,35 @@ async function persistBatchUploads(job, inputImages) {
   }
   await store.save()
   log('info', 'job.batch_uploads.persisted', { jobId: job.id, username: job.username, count: saved.length, dir })
+  return saved
+}
+
+async function persistPendingBatchUploads(job, uploadIds) {
+  const saved = []
+  if (!Array.isArray(uploadIds) || !uploadIds.length) return saved
+  for (let i = 0; i < uploadIds.length; i++) {
+    const upload = pendingUploads.get(uploadIds[i])
+    if (!upload || upload.username !== job.username) {
+      throw new Error('批量上传原图不存在或已过期')
+    }
+    upload.jobId = job.id
+    upload.inputIndex = i + 1
+    upload.consumed = true
+    store.data.batchUploads.unshift({
+      id: upload.id,
+      jobId: job.id,
+      username: job.username,
+      inputIndex: i + 1,
+      filePath: upload.filePath,
+      mime: upload.mime,
+      size: upload.size,
+      createdAt: upload.createdAt,
+      deleted: false,
+    })
+    saved.push(upload)
+  }
+  await store.save()
+  log('info', 'job.batch_uploads.attached', { jobId: job.id, username: job.username, count: saved.length })
   return saved
 }
 
@@ -392,6 +443,7 @@ async function persistResult(job, result) {
       actualParams: result.actualParamsList?.[i] || result.actualParams,
       revisedPrompt: result.revisedPrompts?.[i],
       rawImageUrl: result.rawImageUrls?.[i],
+      requestIndex: result.requestIndexes?.[i],
     })
   }
   for (const record of records) {
@@ -463,15 +515,33 @@ async function runJob(job) {
     let requests = [job.request]
     if (job.request.serverImagePath) {
       const files = await listServerImages(job.request.serverImagePath)
+      if (files.length === 0) {
+        throw new Error('服务器图片目录为空，无法创建批量任务')
+      }
       if (files.length > 200) {
         throw new Error(`服务器图片目录最多支持 200 张图片，当前为 ${files.length} 张`)
       }
       log('info', 'job.server_images.listed', { jobId: job.id, dir: job.request.serverImagePath, count: files.length })
       requests = await Promise.all(files.map(async (filePath) => ({
         ...job.request,
-        inputImageDataUrls: [await readImageFileAsDataUrl(filePath)],
+        inputImageDataUrls: [],
+        inputImageFilePath: filePath,
         sourceServerPath: filePath,
       })))
+    } else if (job.request.batch && job.request.inputImageUploadIds?.length) {
+      const uploads = job.request.inputImageUploadIds.map((uploadId) => {
+        const upload = pendingUploads.get(uploadId)
+        if (!upload || upload.username !== job.username) {
+          throw new Error('批量上传原图不存在或已过期')
+        }
+        return upload
+      })
+      requests = uploads.map((upload) => ({
+        ...job.request,
+        inputImageDataUrls: [],
+        inputImageUploadId: upload.id,
+        inputImageFilePath: upload.filePath,
+      }))
     } else if (job.request.batch && job.request.inputImageDataUrls?.length) {
       requests = job.request.inputImageDataUrls.map((image) => ({
         ...job.request,
@@ -500,7 +570,11 @@ async function runJob(job) {
       })
     }
 
-    if (job.request.batch) await persistBatchUploads(job, job.request.inputImageDataUrls || [])
+    if (job.request.batch && job.request.inputImageUploadIds?.length) {
+      await persistPendingBatchUploads(job, job.request.inputImageUploadIds)
+    } else if (job.request.batch) {
+      await persistBatchUploads(job, job.request.inputImageDataUrls || [])
+    }
     job.progress = { total: requests.length, completed: 0, failed: 0, current: requests.length ? 1 : null }
     log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length, codexCliSplitCount })
 
@@ -508,11 +582,15 @@ async function runJob(job) {
     const actualParamsList = []
     const revisedPrompts = []
     const rawImageUrls = []
+    const requestIndexes = []
     const requestErrors = []
     for (let i = 0; i < requests.length; i++) {
       const request = requests[i]
       const requestStartedAt = Date.now()
       job.progress.current = i + 1
+      const providerRequest = request.inputImageFilePath
+        ? { ...request, inputImageDataUrls: [await readImageFileAsDataUrl(request.inputImageFilePath)] }
+        : request
       log('info', 'provider.request.started', {
         jobId: job.id,
         requestIndex: i + 1,
@@ -520,13 +598,13 @@ async function runJob(job) {
         provider: activeProfile.provider,
         model: activeProfile.model,
         apiMode: activeProfile.apiMode,
-        requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
-        inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
+        requestType: providerRequest.inputImageDataUrls?.length ? 'edit' : 'generate',
+        inputImageCount: Array.isArray(providerRequest.inputImageDataUrls) ? providerRequest.inputImageDataUrls.length : 0,
         hasMask: Boolean(request.maskDataUrl),
         sourceServerPath: request.sourceServerPath,
       })
       try {
-        const result = await callImageProvider(activeProfile, request, job.abortController.signal)
+        const result = await callImageProvider(activeProfile, providerRequest, job.abortController.signal)
         log('info', 'provider.request.done', {
           jobId: job.id,
           requestIndex: i + 1,
@@ -538,6 +616,7 @@ async function runJob(job) {
         actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
         revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
         rawImageUrls.push(...(result.rawImageUrls || []))
+        requestIndexes.push(...result.images.map(() => i + 1))
         job.progress.completed += 1
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -550,8 +629,8 @@ async function runJob(job) {
           provider: activeProfile.provider,
           model: activeProfile.model,
           apiMode: activeProfile.apiMode,
-          requestType: request.inputImageDataUrls?.length ? 'edit' : 'generate',
-          inputImageCount: Array.isArray(request.inputImageDataUrls) ? request.inputImageDataUrls.length : 0,
+          requestType: providerRequest.inputImageDataUrls?.length ? 'edit' : 'generate',
+          inputImageCount: Array.isArray(providerRequest.inputImageDataUrls) ? providerRequest.inputImageDataUrls.length : 0,
           hasMask: Boolean(request.maskDataUrl),
           sourceServerPath: request.sourceServerPath,
         })
@@ -570,6 +649,7 @@ async function runJob(job) {
       actualParamsList,
       revisedPrompts,
       rawImageUrls,
+      requestIndexes,
       ...(requestErrors.length ? {
         partialFailure: true,
         failedCount: requestErrors.length,
@@ -586,6 +666,7 @@ async function runJob(job) {
         id: record.id,
         outputUrl: record.outputUrl,
         thumbnailUrl: record.thumbnailUrl,
+        requestIndex: record.requestIndex,
       })),
     }
     log('info', 'job.done', {
@@ -883,6 +964,34 @@ async function handleApi(req, res, url) {
     return sendJson(res, { upload: publicBatchUpload(upload) })
   }
 
+  if (url.pathname === '/api/uploads' && req.method === 'POST') {
+    const user = requireAuth(req, res)
+    if (!user) return
+    const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
+      return sendJson(res, { error: '只支持 PNG/JPEG/WebP 图片上传' }, 415)
+    }
+    const buffer = await readRawBody(req)
+    if (!buffer.length) return sendJson(res, { error: '上传图片为空' }, 400)
+    const uploadId = id('upload')
+    const dir = path.resolve(rootDir, serverConfig.batchUploadDir, safeSegment(user.username), 'pending')
+    const saved = await saveUploadBuffer(buffer, mime, dir, `${dateStamp()}_${uploadId}`)
+    const upload = {
+      id: uploadId,
+      jobId: null,
+      username: user.username,
+      inputIndex: null,
+      filePath: saved.filePath,
+      mime: saved.mime,
+      size: saved.size,
+      createdAt: Date.now(),
+      consumed: false,
+    }
+    pendingUploads.set(upload.id, upload)
+    log('info', 'upload.create', { ...requestLogDetails(req, user), uploadId: upload.id, mime: upload.mime, size: upload.size })
+    return sendJson(res, { upload: { id: upload.id, mime: upload.mime, size: upload.size, createdAt: upload.createdAt } }, 201)
+  }
+
   if (url.pathname === '/api/jobs' && req.method === 'POST') {
     const user = requireAuth(req, res)
     if (!user) return
@@ -910,6 +1019,7 @@ async function handleApi(req, res, url) {
       batch: Boolean(body.batch),
       batchCount: body.batchCount,
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
+      inputUploadCount: Array.isArray(body.inputImageUploadIds) ? body.inputImageUploadIds.length : 0,
       promptLength: String(body.prompt || '').length,
       serverImagePath: body.serverImagePath ? '[configured]' : '',
       provider: job.activeProfile.provider,
@@ -922,6 +1032,7 @@ async function handleApi(req, res, url) {
       batch: Boolean(body.batch),
       batchCount: body.batchCount,
       inputImageCount: Array.isArray(body.inputImageDataUrls) ? body.inputImageDataUrls.length : 0,
+      inputUploadCount: Array.isArray(body.inputImageUploadIds) ? body.inputImageUploadIds.length : 0,
       promptLength: String(body.prompt || '').length,
       serverImagePath: body.serverImagePath ? '[configured]' : '',
       provider: job.activeProfile.provider,

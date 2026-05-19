@@ -296,7 +296,7 @@ export default function TaskGrid() {
             if (skipSet.has(task.id)) continue
 
             // Stack queued tasks only when they share an explicit batch id.
-            if (task.batch && task.batchId && task.batchTotal && task.batchTotal > 1 && task.status === 'queued') {
+            if (task.batch && task.backendJobOwner == null && task.batchId && task.batchTotal && task.batchTotal > 1 && task.status === 'queued') {
               // Collect consecutive queued tasks from the same batch
               const group = [task]
               for (let j = i + 1; j < filteredTasks.length; j++) {

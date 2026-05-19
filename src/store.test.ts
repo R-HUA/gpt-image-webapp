@@ -51,7 +51,12 @@ vi.mock('./lib/db', () => {
   }
 })
 const backendJobs: any[] = []
+const backendUploads: any[] = []
 vi.mock('./lib/backend', () => ({
+  uploadBackendInputImage: vi.fn(async (dataUrl) => {
+    backendUploads.push(dataUrl)
+    return { upload: { id: `backend-upload-${backendUploads.length}`, mime: 'image/png', size: 10, createdAt: Date.now() } }
+  }),
   createBackendJob: vi.fn(async (request) => {
     backendJobs.push(request)
     return {
@@ -112,6 +117,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 describe('mask draft lifecycle in store actions', () => {
   beforeEach(async () => {
     backendJobs.length = 0
+    backendUploads.length = 0
     getBackendJobMock.mockReset()
     await clearTasks()
     await clearImages()
@@ -168,7 +174,7 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().maskDraft).toBeNull()
   })
 
-  it('submits uploaded batch images as one frontend task and one backend job', async () => {
+  it('submits uploaded batch images as display children backed by one backend job', async () => {
     await putImage(imageA)
     await putImage(imageB)
     useStore.setState({
@@ -181,12 +187,13 @@ describe('mask draft lifecycle in store actions', () => {
     await flushAsyncTasks()
 
     const state = useStore.getState()
-    expect(state.tasks).toHaveLength(1)
-    expect(state.tasks[0].inputImageIds).toEqual([imageA.id, imageB.id])
-    expect(state.tasks[0].batchId).toBeUndefined()
-    expect(state.tasks[0].batchIndex).toBeUndefined()
-    expect(state.tasks[0].batchTotal).toBe(2)
-    expect(state.tasks[0].params.n).toBe(1)
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((item) => item.inputImageIds)).toEqual([[imageA.id], [imageB.id]])
+    expect(state.tasks.map((item) => item.backendJobOwner)).toEqual([true, false])
+    expect(state.tasks.map((item) => [item.batchIndex, item.batchTotal])).toEqual([[1, 2], [2, 2]])
+    expect(state.tasks[0].batchId).toBeTruthy()
+    expect(state.tasks[1].batchId).toBe(state.tasks[0].batchId)
+    expect(state.tasks.every((item) => item.params.n === 1)).toBe(true)
     expect(state.params.n).toBe(3)
     expect(backendJobs).toHaveLength(1)
     expect(backendJobs[0]).toMatchObject({
@@ -194,7 +201,9 @@ describe('mask draft lifecycle in store actions', () => {
       params: expect.objectContaining({ n: 1 }),
     })
     expect(backendJobs[0].settings).toBeUndefined()
-    expect(backendJobs[0].inputImageDataUrls).toHaveLength(2)
+    expect(backendUploads).toEqual([imageA.dataUrl, imageB.dataUrl])
+    expect(backendJobs[0].inputImageDataUrls).toHaveLength(0)
+    expect(backendJobs[0].inputImageUploadIds).toEqual(['backend-upload-1', 'backend-upload-2'])
     expect(backendJobs[0].batchCount).toBeUndefined()
   })
 
@@ -210,11 +219,20 @@ describe('mask draft lifecycle in store actions', () => {
     await flushAsyncTasks()
 
     const state = useStore.getState()
-    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks).toHaveLength(2)
     expect(state.tasks[0]).toMatchObject({
       batch: true,
       batchCount: 2,
+      batchIndex: 1,
       batchTotal: 2,
+      backendJobOwner: true,
+      params: expect.objectContaining({ n: 1 }),
+    })
+    expect(state.tasks[1]).toMatchObject({
+      batch: true,
+      batchIndex: 2,
+      batchTotal: 2,
+      backendJobOwner: false,
       params: expect.objectContaining({ n: 1 }),
     })
     expect(state.params.n).toBe(4)
@@ -320,6 +338,88 @@ describe('mask draft lifecycle in store actions', () => {
     } finally {
       globalThis.fetch = originalFetch
       vi.unstubAllGlobals()
+    }
+  })
+
+  it('maps one backend batch job results back to each display child by request index', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+    try {
+      const childA = task({
+        id: 'batch-child-a',
+        status: 'running',
+        batch: true,
+        batchId: 'batch-job',
+        batchIndex: 1,
+        batchTotal: 2,
+        backendJobOwner: true,
+        backendJobId: 'backend-job-batch',
+        inputImageIds: [imageA.id],
+        createdAt: 1_000,
+        finishedAt: null,
+        elapsed: null,
+      })
+      const childB = task({
+        id: 'batch-child-b',
+        status: 'running',
+        batch: true,
+        batchId: 'batch-job',
+        batchIndex: 2,
+        batchTotal: 2,
+        backendJobOwner: false,
+        backendJobId: 'backend-job-batch',
+        inputImageIds: [imageB.id],
+        createdAt: 1_001,
+        finishedAt: null,
+        elapsed: null,
+      })
+      getBackendJobMock.mockResolvedValueOnce({
+        job: {
+          id: 'backend-job-batch',
+          status: 'done',
+          queuePosition: 0,
+          createdAt: 1_000,
+          startedAt: 1_100,
+          finishedAt: 2_000,
+          error: null,
+          progress: { total: 2, completed: 2, failed: 0, current: null },
+          result: {
+            images: [],
+            actualParams: { n: 2 },
+            actualParamsList: [{ n: 1 }, { n: 1 }],
+            revisedPrompts: [],
+            rawImageUrls: [],
+            requestIndexes: [1, 2],
+            records: [
+              { id: 'record-a', outputUrl: '/api/gallery/record-a/image', thumbnailUrl: '/api/gallery/record-a/thumbnail', requestIndex: 1 },
+              { id: 'record-b', outputUrl: '/api/gallery/record-b/image', thumbnailUrl: '/api/gallery/record-b/thumbnail', requestIndex: 2 },
+            ],
+          },
+        },
+      })
+      await putTask(childA)
+      await putTask(childB)
+      useStore.setState({ tasks: [childA, childB] })
+
+      await initStore()
+      await flushAsyncTasks()
+
+      const completedA = useStore.getState().tasks.find((item) => item.id === childA.id)
+      const completedB = useStore.getState().tasks.find((item) => item.id === childB.id)
+      expect(completedA).toMatchObject({
+        status: 'done',
+        inputImageIds: [imageA.id],
+        outputImages: [expect.stringMatching(/^stored-image-\d+$/)],
+      })
+      expect(completedB).toMatchObject({
+        status: 'done',
+        inputImageIds: [imageB.id],
+        outputImages: [expect.stringMatching(/^stored-image-\d+$/)],
+      })
+      expect(completedA?.outputImages[0]).not.toBe(completedB?.outputImages[0])
+      expect(getBackendJobMock).toHaveBeenCalledTimes(1)
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 

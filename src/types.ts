@@ -165,6 +165,8 @@ export interface TaskRecord {
   backendProgress?: BackendJobProgress
   /** 后端 job 已完成但本地结果同步失败，可重试同步同一个 job */
   backendRecoverable?: boolean
+  /** 同一个后端批量 job 中负责创建、轮询和同步结果的前端任务 */
+  backendJobOwner?: boolean
   /** 批量任务标记 */
   batch?: boolean
   batchId?: string

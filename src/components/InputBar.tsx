@@ -1881,9 +1881,9 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                           />
                         </label>
                       )}
-                      {batchMode && serverImageBatchMode && <span>作为 1 个批量任务提交，后端按目录图片展开子请求</span>}
-                      {batchMode && !serverImageBatchMode && inputImages.length > 0 && <span>作为 1 个批量任务提交，包含 {inputImages.length} 个子请求</span>}
-                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && <span>作为 1 个批量任务提交，包含 {batchCount} 个子请求</span>}
+                      {batchMode && serverImageBatchMode && <span>作为 1 个后端批量任务提交，运行后按目录图片显示子卡片</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length > 0 && <span>作为 1 个后端批量任务提交，显示 {inputImages.length} 张子卡片</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && <span>作为 1 个后端批量任务提交，显示 {batchCount} 张子卡片</span>}
                       {user?.role === 'admin' && (
                         <button
                           type="button"
@@ -1994,10 +1994,10 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                   {batchMode && (
                     <div className="mb-2 truncate text-xs text-gray-500 dark:text-gray-400">
                       {serverImageBatchMode
-                        ? `作为 1 个批量任务提交，后端按目录图片展开子请求${adminServerImagePath ? ` · ${adminServerImagePath}` : ''}`
+                        ? `作为 1 个后端批量任务提交，运行后按目录图片显示子卡片${adminServerImagePath ? ` · ${adminServerImagePath}` : ''}`
                         : inputImages.length > 0
-                        ? `作为 1 个批量任务提交，包含 ${inputImages.length} 个子请求`
-                        : `作为 1 个批量任务提交，包含 ${batchCount} 个子请求`}
+                        ? `作为 1 个后端批量任务提交，显示 ${inputImages.length} 张子卡片`
+                        : `作为 1 个后端批量任务提交，显示 ${batchCount} 张子卡片`}
                     </div>
                   )}
                   {renderParams('grid-cols-2')}

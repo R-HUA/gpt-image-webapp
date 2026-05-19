@@ -28,10 +28,11 @@ export interface BackendJobResult {
   actualParamsList?: Array<Partial<TaskParams> | undefined>
   revisedPrompts?: Array<string | undefined>
   rawImageUrls?: string[]
+  requestIndexes?: number[]
   partialFailure?: boolean
   failedCount?: number
   requestErrors?: Array<{ requestIndex: number; message: string }>
-  records?: Array<{ id: string; outputUrl: string; thumbnailUrl: string }>
+  records?: Array<{ id: string; outputUrl: string; thumbnailUrl: string; requestIndex?: number }>
 }
 
 export interface BackendGalleryRecord {
@@ -114,6 +115,7 @@ export function createBackendJob(request: {
   prompt: string
   params: TaskParams
   inputImageDataUrls: string[]
+  inputImageUploadIds?: string[]
   maskDataUrl?: string
   batch?: boolean
   batchCount?: number
@@ -122,6 +124,16 @@ export function createBackendJob(request: {
   return api<{ job: BackendJob }>('/api/jobs', {
     method: 'POST',
     body: JSON.stringify(request),
+  })
+}
+
+export async function uploadBackendInputImage(dataUrl: string) {
+  const response = await fetch(dataUrl)
+  const blob = await response.blob()
+  return api<{ upload: { id: string; mime: string; size: number; createdAt: number } }>('/api/uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+    body: blob,
   })
 }
 
