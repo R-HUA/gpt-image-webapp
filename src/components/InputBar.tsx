@@ -1460,10 +1460,15 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const renderImageThumbs = () => {
     return (
       <div ref={imagesRef}>
-        <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
+        <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3 max-h-[200px] overflow-y-auto custom-scrollbar">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
         </div>
+        {inputImages.length > 8 && (
+          <div className="text-[10px] text-gray-400 dark:text-gray-500 text-center -mt-2 mb-2">
+            共 {inputImages.length} 张图片
+          </div>
+        )}
         {touchDragPreview?.src && createPortal(
           <div
             className="fixed z-[140] h-[52px] w-[52px] overflow-hidden rounded-xl shadow-xl pointer-events-none opacity-90"
@@ -2033,7 +2038,15 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                 >
                   <ButtonTooltip visible={!hasSubmitApiConfig && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => hasSubmitApiConfig ? submitTask() : setShowSettings(true)}
+                    onClick={() => {
+                      if (hasSubmitApiConfig) {
+                        submitTask()
+                        // Auto-collapse on mobile after submit to provide clear feedback
+                        if (isMobile) setMobileCollapsed(true)
+                      } else {
+                        setShowSettings(true)
+                      }
+                    }}
                     disabled={hasSubmitApiConfig ? !canSubmit : false}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
                       !hasSubmitApiConfig

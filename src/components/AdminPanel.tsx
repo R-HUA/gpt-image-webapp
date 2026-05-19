@@ -29,6 +29,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
   const [newKey, setNewKey] = useState('')
   const [error, setError] = useState('')
   const [createdToken, setCreatedToken] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
 
   const refresh = async () => {
     if (user?.role !== 'admin') return
@@ -60,12 +61,17 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
   }
 
   useEffect(() => {
-    refresh().catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    setIsLoading(true)
+    refresh()
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setIsLoading(false))
   }, [user?.role, logPage.page, uploadPage.page])
 
   if (user?.role !== 'admin') return null
 
   const saveSettings = async () => {
+    if (isLoading) return
+    setIsLoading(true)
     setError('')
     try {
       const res = await updateAdminSettings(settings)
@@ -76,6 +82,8 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -92,11 +100,18 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
             <input value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} placeholder="密码" className="min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
             <button
               onClick={async () => {
-                await createUser({ username: newUser.username, displayName: newUser.displayName || newUser.username, password: newUser.password || '123456' })
-                setNewUser({ username: '', displayName: '', password: '' })
-                await refresh()
+                if (isLoading) return
+                setIsLoading(true)
+                try {
+                  await createUser({ username: newUser.username, displayName: newUser.displayName || newUser.username, password: newUser.password || '123456' })
+                  setNewUser({ username: '', displayName: '', password: '' })
+                  await refresh()
+                } finally {
+                  setIsLoading(false)
+                }
               }}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white"
+              disabled={isLoading}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white disabled:opacity-50"
               title="新增用户"
               aria-label="新增用户"
             >
@@ -125,22 +140,28 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
                   className="min-w-0 rounded-md border px-2 py-1.5 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
                 />
                 <div className="flex items-center justify-end gap-1">
-                  <button onClick={async () => {
-                    const draft = editingUsers[item.username] || { displayName: item.displayName, password: '' }
-                    await updateUser(item.username, { displayName: draft.displayName, ...(draft.password ? { password: draft.password } : {}) })
-                    setEditingUsers((prev) => ({ ...prev, [item.username]: { displayName: draft.displayName, password: '' } }))
-                    await refresh()
-                  }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title="保存用户" aria-label="保存用户">
+                  <button disabled={isLoading} onClick={async () => {
+                    if (isLoading) return
+                    setIsLoading(true)
+                    try {
+                      const draft = editingUsers[item.username] || { displayName: item.displayName, password: '' }
+                      await updateUser(item.username, { displayName: draft.displayName, ...(draft.password ? { password: draft.password } : {}) })
+                      setEditingUsers((prev) => ({ ...prev, [item.username]: { displayName: draft.displayName, password: '' } }))
+                      await refresh()
+                    } finally {
+                      setIsLoading(false)
+                    }
+                  }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08] disabled:opacity-50" title="保存用户" aria-label="保存用户">
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                   </button>
-                  <button onClick={async () => { await updateUser(item.username, { disabled: !item.disabled }); await refresh() }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08]" title={item.disabled ? '启用' : '禁用'} aria-label={item.disabled ? '启用' : '禁用'}>
+                  <button disabled={isLoading} onClick={async () => { if (isLoading) return; setIsLoading(true); try { await updateUser(item.username, { disabled: !item.disabled }); await refresh() } finally { setIsLoading(false) } }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-gray-200 dark:hover:bg-white/[0.08] disabled:opacity-50" title={item.disabled ? '启用' : '禁用'} aria-label={item.disabled ? '启用' : '禁用'}>
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       {item.disabled ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M12 3a9 9 0 100 18 9 9 0 000-18z" /> : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 015.636 5.636m12.728 12.728A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636" />}
                     </svg>
                   </button>
-                  <button onClick={async () => { await deleteUser(item.username); await refresh() }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除用户" aria-label="删除用户">
+                  <button disabled={isLoading} onClick={async () => { if (isLoading) return; setIsLoading(true); try { await deleteUser(item.username); await refresh() } finally { setIsLoading(false) } }} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50" title="删除用户" aria-label="删除用户">
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
                     </svg>
@@ -193,7 +214,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
                   </label>
                 </div>
               )}
-              <button onClick={saveSettings} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white" title="保存设置" aria-label="保存设置">
+              <button disabled={isLoading} onClick={saveSettings} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white disabled:opacity-50" title="保存设置" aria-label="保存设置">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
@@ -208,7 +229,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
         <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">用于脚本、skill 或第三方系统直接调用本后端。不要和上游服务商密钥混用。</p>
         <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_2.5rem]">
           <input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="令牌名称" className="min-w-0 rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
-          <button onClick={async () => { const res = await createApiKey({ name: newKey || '后端访问令牌' }); setCreatedToken(res.key.token); setNewKey(''); await refresh() }} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white" title="新增令牌" aria-label="新增令牌">
+          <button disabled={isLoading} onClick={async () => { if (isLoading) return; setIsLoading(true); try { const res = await createApiKey({ name: newKey || '后端访问令牌' }); setCreatedToken(res.key.token); setNewKey(''); await refresh() } finally { setIsLoading(false) } }} className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500 text-white disabled:opacity-50" title="新增令牌" aria-label="新增令牌">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m7-7H5" />
             </svg>
@@ -220,7 +241,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
             <div key={key.id} className="flex min-w-0 items-center gap-3 rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-white/[0.03]">
               <span className="min-w-0 truncate">{key.name}</span>
               <span className="min-w-0 truncate font-mono text-xs text-gray-400">{key.token}</span>
-              <button onClick={async () => { await deleteApiKey(key.id); await refresh() }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除令牌" aria-label="删除令牌">
+              <button disabled={isLoading} onClick={async () => { if (isLoading) return; setIsLoading(true); try { await deleteApiKey(key.id); await refresh() } finally { setIsLoading(false) } }} className="ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50" title="删除令牌" aria-label="删除令牌">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
                 </svg>
@@ -259,7 +280,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               </div>
               <span className="text-gray-500">{new Date(upload.createdAt).toLocaleString()}</span>
               <span className="text-gray-500">{upload.size ? `${Math.round(upload.size / 1024)} KB` : '-'}</span>
-              <button onClick={async () => { await deleteBatchUpload(upload.id); await refresh() }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10" title="删除原图" aria-label="删除原图">
+              <button disabled={isLoading} onClick={async () => { if (isLoading) return; setIsLoading(true); try { await deleteBatchUpload(upload.id); await refresh() } finally { setIsLoading(false) } }} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50" title="删除原图" aria-label="删除原图">
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4h6v3m-8 0h10" />
                 </svg>

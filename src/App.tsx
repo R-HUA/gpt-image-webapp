@@ -19,6 +19,7 @@ import ImageContextMenu from './components/ImageContextMenu'
 import SupportPromptModal from './components/SupportPromptModal'
 import LoginScreen from './components/LoginScreen'
 import GalleryPage from './components/GalleryPage'
+import BatchDetailModal from './components/BatchDetailModal'
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
@@ -60,6 +61,16 @@ export default function App() {
 
   useEffect(() => {
     refreshSession()
+  }, [])
+
+  // Auto-redirect to login when session expires during API calls (e.g., polling)
+  useEffect(() => {
+    const handler = () => {
+      setUser(null)
+      clearBackendRuntimeState()
+    }
+    window.addEventListener('gip-session-expired', handler)
+    return () => window.removeEventListener('gip-session-expired', handler)
   }, [])
 
   useEffect(() => {
@@ -133,6 +144,7 @@ export default function App() {
       </main>
       <InputBar user={user} />
       <DetailModal />
+      <BatchDetailModal />
       <Lightbox />
       <SettingsModal user={user} />
       <ConfirmDialog />

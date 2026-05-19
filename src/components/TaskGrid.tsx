@@ -253,6 +253,8 @@ export default function TaskGrid() {
     }
   }, [clearSelection, isMac])
 
+  const setBatchDetailBatchId = useStore((s) => s.setBatchDetailBatchId)
+
   if (!filteredTasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
@@ -280,6 +282,9 @@ export default function TaskGrid() {
     )
   }
 
+  // Group tasks: filter hidden, group by batchId for stacking
+  const visibleTasks = filteredTasks.filter((t) => !t.hiddenByRetry)
+
   return (
     <div 
       ref={rootRef}
@@ -291,46 +296,57 @@ export default function TaskGrid() {
           const rendered: React.ReactNode[] = []
           const skipSet = new Set<string>()
 
-          for (let i = 0; i < filteredTasks.length; i++) {
-            const task = filteredTasks[i]
+          for (let i = 0; i < visibleTasks.length; i++) {
+            const task = visibleTasks[i]
             if (skipSet.has(task.id)) continue
 
-            // Stack queued tasks only when they share an explicit batch id.
-            if (task.batch && task.backendJobOwner == null && task.batchId && task.batchTotal && task.batchTotal > 1 && task.status === 'queued') {
-              // Collect consecutive queued tasks from the same batch
-              const group = [task]
-              for (let j = i + 1; j < filteredTasks.length; j++) {
-                const next = filteredTasks[j]
-                if (
-                  next.batchId === task.batchId &&
-                  next.status === 'queued'
-                ) {
-                  group.push(next)
-                  skipSet.add(next.id)
-                } else {
-                  break
-                }
-              }
+            // Stack ALL tasks in the same batch (not just queued)
+            if (task.batch && task.batchId && task.batchTotal && task.batchTotal > 1) {
+              const group = visibleTasks.filter((t) => t.batchId === task.batchId && !skipSet.has(t.id))
+              for (const t of group) skipSet.add(t.id)
 
               if (group.length > 1) {
-                // Render stacked card
-                const stackCount = group.length
+                const doneCount = group.filter((t) => t.status === 'done').length
+                const errorCount = group.filter((t) => t.status === 'error').length
+                const runningCount = group.filter((t) => t.status === 'running' || t.status === 'queued').length
+                const total = group.length
+                const stackCount = Math.min(group.length, 3)
+                const isAllDone = doneCount === total
+                const hasErrors = errorCount > 0
+                const isRunning = runningCount > 0
+
+                // Find the best cover task (first done task, or first task)
+                const coverTask = group.find((t) => t.status === 'done') || group[0]
+
+                const statusLabel = isAllDone
+                  ? `${total} 张已完成`
+                  : isRunning
+                  ? `${doneCount}/${total} 完成`
+                  : hasErrors
+                  ? `${doneCount} 成功 · ${errorCount} 失败`
+                  : `${doneCount}/${total}`
+
+                const badgeBg = isAllDone
+                  ? 'bg-green-500'
+                  : hasErrors && !isRunning
+                  ? 'bg-red-500'
+                  : isRunning
+                  ? 'bg-blue-500'
+                  : 'bg-gray-500'
+
                 rendered.push(
-                  <div key={task.id} className="task-card-wrapper batch-stack-wrapper" data-task-id={task.id} style={{ marginBottom: stackCount > 2 ? '14px' : '8px' }}>
-                    {/* Shadow layers */}
+                  <div key={task.batchId} className="task-card-wrapper batch-stack-wrapper" data-task-id={coverTask.id} style={{ marginBottom: stackCount > 2 ? '14px' : '8px' }}>
                     {stackCount > 2 && <div className="batch-stack-shadow batch-stack-shadow-2" />}
                     <div className="batch-stack-shadow batch-stack-shadow-1" />
-                    {/* Batch count badge */}
-                    <div className="absolute -top-2 -right-2 z-20 flex items-center gap-1 rounded-full bg-gray-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
+                    <div className={`absolute -top-2 -right-2 z-20 flex items-center gap-1 rounded-full ${badgeBg} px-2 py-0.5 text-[10px] font-bold text-white shadow-sm`}>
                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                       </svg>
-                      ×{stackCount} 排队中
+                      {statusLabel}
                     </div>
-                    {/* Main visible card */}
                     <div className="relative z-10">
                       <TaskCard
-                        task={task}
+                        task={coverTask}
                         onClick={(e) => {
                           if (Date.now() < suppressClickUntil.current) {
                             e.preventDefault()
@@ -339,19 +355,18 @@ export default function TaskGrid() {
                           suppressClickUntil.current = 0
                           const isCtrl = isMac ? e.metaKey : e.ctrlKey
                           if (isCtrl) {
-                            // Ctrl-click selects all in group
                             for (const t of group) useStore.getState().toggleTaskSelection(t.id)
                           } else if (selectedTaskIds.length > 0) {
                             clearSelection()
-                            setDetailTaskId(task.id)
+                            setBatchDetailBatchId(task.batchId!)
                           } else {
-                            setDetailTaskId(task.id)
+                            setBatchDetailBatchId(task.batchId!)
                           }
                         }}
-                        onReuse={() => reuseConfig(task)}
-                        onEditOutputs={() => editOutputs(task)}
-                        onDelete={() => handleDelete(task)}
-                        isSelected={selectedTaskIds.includes(task.id)}
+                        onReuse={() => reuseConfig(coverTask)}
+                        onEditOutputs={() => editOutputs(coverTask)}
+                        onDelete={() => handleDelete(coverTask)}
+                        isSelected={selectedTaskIds.includes(coverTask.id)}
                       />
                     </div>
                   </div>

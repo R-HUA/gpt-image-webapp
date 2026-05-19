@@ -133,6 +133,12 @@ export interface BackendJobProgress {
   completed: number
   failed: number
   current?: number | null
+  /** Gallery records for sub-requests that completed during batch execution */
+  completedRecords?: Array<{ id: string; outputUrl: string; thumbnailUrl: string; requestIndex: number }>
+  /** Error details for sub-requests that failed during batch execution */
+  failedRequests?: Array<{ requestIndex: number; message: string }>
+  /** Number of skipped sub-requests (individually cancelled) */
+  skipped?: number
 }
 
 export interface TaskRecord {
@@ -202,6 +208,10 @@ export interface TaskRecord {
   elapsed: number | null
   /** 是否收藏 */
   isFavorite?: boolean
+  /** 因重试而被隐藏（用户可展开查看） */
+  hiddenByRetry?: boolean
+  /** 重试后替代此任务的新任务 ID */
+  retryReplacementId?: string
 }
 
 // ===== IndexedDB 存储的图片 =====

@@ -84,6 +84,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   const payload = await res.json().catch(() => ({}))
+  if (res.status === 401) {
+    // Notify App to redirect to login instead of treating as task failure
+    window.dispatchEvent(new CustomEvent('gip-session-expired'))
+  }
   if (!res.ok) {
     const error = new Error(payload.error || `HTTP ${res.status}`)
     ;(error as Error & { status?: number }).status = res.status
@@ -143,6 +147,13 @@ export function getBackendJob(id: string) {
 
 export function cancelBackendJob(id: string) {
   return api<{ job: BackendJob }>(`/api/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function patchBackendJob(id: string, patch: { skipIndexes?: number[] }) {
+  return api<{ job: BackendJob }>(`/api/jobs/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
 }
 
 export function listGallery(params?: { mode?: 'all'; owner?: string; page?: number; pageSize?: number }) {

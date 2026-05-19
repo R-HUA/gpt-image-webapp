@@ -575,16 +575,20 @@ async function runJob(job) {
     } else if (job.request.batch) {
       await persistBatchUploads(job, job.request.inputImageDataUrls || [])
     }
-    job.progress = { total: requests.length, completed: 0, failed: 0, current: requests.length ? 1 : null }
+    job.progress = { total: requests.length, completed: 0, failed: 0, current: requests.length ? 1 : null, completedRecords: [], failedRequests: [], skipped: 0 }
     log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length, codexCliSplitCount })
 
-    const allImages = []
-    const actualParamsList = []
-    const revisedPrompts = []
-    const rawImageUrls = []
-    const requestIndexes = []
+    const allRecords = []
     const requestErrors = []
+    let successImageCount = 0
     for (let i = 0; i < requests.length; i++) {
+      // Support skipping individual sub-requests (batch item cancellation)
+      if (job.skipIndexes?.includes(i + 1)) {
+        job.progress.skipped = (job.progress.skipped || 0) + 1
+        job.progress.current = i + 1 < requests.length ? i + 2 : null
+        log('info', 'provider.request.skipped', { jobId: job.id, requestIndex: i + 1 })
+        continue
+      }
       const request = requests[i]
       const requestStartedAt = Date.now()
       job.progress.current = i + 1
@@ -612,15 +616,29 @@ async function runJob(job) {
           imageCount: result.images.length,
           rawImageUrlCount: result.rawImageUrls?.length || 0,
         })
-        allImages.push(...result.images)
-        actualParamsList.push(...(result.actualParamsList || result.images.map(() => result.actualParams)))
-        revisedPrompts.push(...(result.revisedPrompts || result.images.map(() => undefined)))
-        rawImageUrls.push(...(result.rawImageUrls || []))
-        requestIndexes.push(...result.images.map(() => i + 1))
+        // Persist this sub-request's results immediately for real-time partial results
+        const partialRecords = await persistResult(job, {
+          images: result.images,
+          actualParams: result.actualParams,
+          actualParamsList: result.actualParamsList || result.images.map(() => result.actualParams),
+          revisedPrompts: result.revisedPrompts || result.images.map(() => undefined),
+          rawImageUrls: result.rawImageUrls || [],
+          requestIndexes: result.images.map(() => i + 1),
+        })
+        allRecords.push(...partialRecords)
+        successImageCount += result.images.length
+        // Update progress with completed records for frontend polling
+        job.progress.completedRecords.push(...partialRecords.map((r) => ({
+          id: r.id,
+          outputUrl: r.outputUrl,
+          thumbnailUrl: r.thumbnailUrl,
+          requestIndex: r.requestIndex,
+        })))
         job.progress.completed += 1
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         requestErrors.push({ requestIndex: i + 1, message })
+        job.progress.failedRequests.push({ requestIndex: i + 1, message })
         job.progress.failed += 1
         logError('provider.request.failed', err, {
           jobId: job.id,
@@ -636,33 +654,29 @@ async function runJob(job) {
         })
         // If it's the only request, or if it's the last one and we have NO successful images yet, throw.
         // Otherwise, we swallow the error and return whatever succeeded.
-        if (requests.length === 1 || (i === requests.length - 1 && allImages.length === 0)) {
+        if (requests.length === 1 || (i === requests.length - 1 && successImageCount === 0)) {
           throw err
         }
       }
       job.progress.current = i + 1 < requests.length ? i + 2 : null
     }
 
+    // Results already persisted per sub-request above; build final result from accumulated records
     const result = {
-      images: allImages,
-      actualParams: { n: allImages.length },
-      actualParamsList,
-      revisedPrompts,
-      rawImageUrls,
-      requestIndexes,
+      images: [],
+      actualParams: { n: successImageCount },
       ...(requestErrors.length ? {
         partialFailure: true,
         failedCount: requestErrors.length,
         requestErrors,
       } : {}),
     }
-    const records = await persistResult(job, result)
     job.status = 'done'
     job.finishedAt = Date.now()
     if (job.progress) job.progress.current = null
     job.result = {
       ...result,
-      records: records.map((record) => ({
+      records: allRecords.map((record) => ({
         id: record.id,
         outputUrl: record.outputUrl,
         thumbnailUrl: record.thumbnailUrl,
@@ -673,9 +687,10 @@ async function runJob(job) {
       jobId: job.id,
       username: job.username,
       durationMs: job.finishedAt - startedAt,
-      imageCount: allImages.length,
-      resultCount: records.length,
+      imageCount: successImageCount,
+      resultCount: allRecords.length,
       failedCount: requestErrors.length,
+      skippedCount: job.progress?.skipped || 0,
     })
   } catch (err) {
     job.status = job.status === 'cancelled' ? 'cancelled' : 'error'
@@ -1051,6 +1066,14 @@ async function handleApi(req, res, url) {
     const job = jobs.get(jobId)
     if (!job || (user.role !== 'admin' && job.username !== user.username)) return sendJson(res, { error: '任务不存在' }, 404)
     if (req.method === 'GET') return sendJson(res, { job: getJobView(job) })
+    if (req.method === 'PATCH') {
+      const body = await readJson(req)
+      if (Array.isArray(body.skipIndexes)) {
+        job.skipIndexes = [...new Set([...(job.skipIndexes || []), ...body.skipIndexes.map(Number).filter(Number.isFinite)])]
+        log('info', 'job.skip_indexes.updated', { ...requestLogDetails(req, user), jobId: job.id, skipIndexes: job.skipIndexes })
+      }
+      return sendJson(res, { job: getJobView(job) })
+    }
     if (req.method === 'DELETE') {
       if (!cancelJob(job)) return sendJson(res, { error: '只能取消排队中的请求' }, 409)
       await addAudit(user, 'job.cancel', { jobId: job.id }, req)

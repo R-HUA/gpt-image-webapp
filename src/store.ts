@@ -30,7 +30,7 @@ import {
   clearImages,
   storeImage,
 } from './lib/db'
-import { cancelBackendJob, createBackendJob, getBackendJob, uploadBackendInputImage } from './lib/backend'
+import { cancelBackendJob, createBackendJob, getBackendJob, patchBackendJob, uploadBackendInputImage } from './lib/backend'
 import type { BackendJob, BackendJobResult } from './lib/backend'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
@@ -433,6 +433,10 @@ interface AppState {
     cancelAction?: () => void
   } | null
   setConfirmDialog: (d: AppState['confirmDialog']) => void
+
+  // Batch detail modal
+  batchDetailBatchId: string | null
+  setBatchDetailBatchId: (id: string | null) => void
 }
 
 export const useStore = create<AppState>()(
@@ -649,6 +653,10 @@ export const useStore = create<AppState>()(
         if (confirmDialog) dismissAllTooltips()
         set({ confirmDialog })
       },
+
+      // Batch detail modal
+      batchDetailBatchId: null,
+      setBatchDetailBatchId: (batchDetailBatchId) => set({ batchDetailBatchId }),
     }),
     {
       name: 'gpt-image-playground',
@@ -1523,6 +1531,8 @@ async function executeTask(taskId: string) {
 
       backendJob = created.job
     }
+    const appliedRecordIds = new Set<string>()
+    const appliedFailedIndexes = new Set<number>()
     while (backendJob.status === 'queued' || backendJob.status === 'running') {
       await sleep(1200)
       const latest = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1540,6 +1550,62 @@ async function executeTask(taskId: string) {
       backendJob = polled.job
       const displayOwner = await ensureServerBatchDisplayTasks(latest, backendJob)
       updateBackendJobStateForDisplayTasks(displayOwner, backendJob, backendJob.status === 'queued' ? 'queued' : backendJob.status === 'running' ? 'running' : latest.status)
+
+      // Apply partial results from completedRecords in real-time
+      if (backendJob.progress?.completedRecords?.length && displayOwner.batchId) {
+        const siblings = getBatchSiblings(displayOwner)
+        for (const record of backendJob.progress.completedRecords) {
+          if (appliedRecordIds.has(record.id)) continue
+          appliedRecordIds.add(record.id)
+          const sibling = siblings.find((s) => s.batchIndex === record.requestIndex)
+          if (sibling && sibling.status !== 'done') {
+            try {
+              const imgRes = await fetch(record.outputUrl, { credentials: 'include' })
+              if (imgRes.ok) {
+                const blob = await imgRes.blob()
+                const reader = new FileReader()
+                const dataUrl = await new Promise<string>((resolve) => {
+                  reader.onload = () => resolve(reader.result as string)
+                  reader.readAsDataURL(blob)
+                })
+                const imgId = await storeImage(dataUrl, 'generated')
+                cacheImage(imgId, dataUrl)
+                updateTaskInStore(sibling.id, {
+                  outputImages: [imgId],
+                  status: 'done',
+                  error: null,
+                  finishedAt: Date.now(),
+                  elapsed: Date.now() - sibling.createdAt,
+                  backendRecoverable: false,
+                  backendProgress: undefined,
+                })
+              }
+            } catch {
+              // Will be handled when job completes
+            }
+          }
+        }
+      }
+
+      // Apply partial failures from failedRequests in real-time
+      if (backendJob.progress?.failedRequests?.length && displayOwner.batchId) {
+        const siblings = getBatchSiblings(displayOwner)
+        for (const failure of backendJob.progress.failedRequests) {
+          if (appliedFailedIndexes.has(failure.requestIndex)) continue
+          appliedFailedIndexes.add(failure.requestIndex)
+          const sibling = siblings.find((s) => s.batchIndex === failure.requestIndex)
+          if (sibling && sibling.status !== 'done' && sibling.status !== 'error') {
+            updateTaskInStore(sibling.id, {
+              status: 'error',
+              error: failure.message,
+              finishedAt: Date.now(),
+              elapsed: Date.now() - sibling.createdAt,
+              backendRecoverable: false,
+              backendProgress: undefined,
+            })
+          }
+        }
+      }
     }
 
     if (backendJob.status === 'cancelled') {
@@ -1816,6 +1882,77 @@ export async function retryTask(task: TaskRecord) {
   await putTask(newTask)
 
   executeTask(taskId)
+}
+
+/** 重试批次内单个失败任务：创建新任务，隐藏原任务（可展开查看） */
+export async function retryBatchItem(task: TaskRecord) {
+  const { settings } = useStore.getState()
+  const activeProfile = getActiveApiProfile(settings)
+  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const taskId = genId()
+  const newTask: TaskRecord = {
+    id: taskId,
+    prompt: task.prompt,
+    params: normalizedParams,
+    apiProvider: activeProfile.provider,
+    apiProfileId: activeProfile.id,
+    apiProfileName: activeProfile.name,
+    apiModel: activeProfile.model,
+    inputImageIds: [...task.inputImageIds],
+    maskTargetImageId: task.maskTargetImageId ?? null,
+    maskImageId: task.maskImageId ?? null,
+    outputImages: [],
+    status: 'queued',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+    // Keep in same batch for visual grouping
+    batch: true,
+    batchId: task.batchId,
+    batchCount: undefined,
+    batchIndex: task.batchIndex,
+    batchTotal: task.batchTotal,
+    serverImagePath: task.serverImagePath,
+    queuePosition: 0,
+    backendProgress: undefined,
+    backendRecoverable: false,
+  }
+
+  // Hide the original failed task and link to replacement
+  updateTaskInStore(task.id, {
+    hiddenByRetry: true,
+    retryReplacementId: taskId,
+  })
+
+  const latestTasks = useStore.getState().tasks
+  useStore.getState().setTasks([newTask, ...latestTasks])
+  await putTask(newTask)
+
+  executeTask(taskId)
+}
+
+/** 跳过批量 job 中未开始的 sub-request（个别取消） */
+export async function skipBatchSubRequest(batchOwnerTask: TaskRecord, requestIndex: number) {
+  const backendJobId = batchOwnerTask.backendJobId
+  if (!backendJobId) return
+  try {
+    await patchBackendJob(backendJobId, { skipIndexes: [requestIndex] })
+    // Find the sibling task for this request index and mark it cancelled
+    const siblings = getBatchSiblings(batchOwnerTask)
+    const sibling = siblings.find((t) => t.batchIndex === requestIndex)
+    if (sibling && sibling.status !== 'done') {
+      updateTaskInStore(sibling.id, {
+        status: 'cancelled',
+        error: '已取消',
+        finishedAt: Date.now(),
+        elapsed: Date.now() - sibling.createdAt,
+      })
+    }
+    useStore.getState().showToast('已取消该子任务', 'success')
+  } catch (err) {
+    useStore.getState().showToast(err instanceof Error ? err.message : String(err), 'error')
+  }
 }
 
 /** 复用配置 */
