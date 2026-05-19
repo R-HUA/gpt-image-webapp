@@ -1318,12 +1318,9 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
                 <div className="mx-auto max-w-md rounded-2xl border border-gray-200/70 bg-gray-50/70 p-5 dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <h4 className="text-base font-bold text-gray-800 dark:text-gray-100">私有后端模式</h4>
                   <p className="mt-3 text-sm leading-7 text-gray-500 dark:text-gray-400">
-                    当前版本由后端统一代理图片服务商请求，登录用户才能提交生成任务。上游服务商密钥、并发数、服务器图片目录和后端访问令牌都在设置的管理员子菜单维护。
+                    
                   </p>
                   <div className="mt-4 grid gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    <div className="rounded-lg bg-white px-3 py-2 dark:bg-white/[0.04]">前端历史：仅保存在当前浏览器</div>
-                    <div className="rounded-lg bg-white px-3 py-2 dark:bg-white/[0.04]">服务器结果：按用户名分目录落盘</div>
-                    <div className="rounded-lg bg-white px-3 py-2 dark:bg-white/[0.04]">图库权限：普通用户只看自己，管理员可审计全部</div>
                   </div>
                 </div>
               </div>
