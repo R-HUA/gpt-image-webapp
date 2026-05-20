@@ -7,6 +7,7 @@ import type {
   InputImage,
   MaskDraft,
   TaskRecord,
+  TaskStatus,
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
@@ -61,8 +62,21 @@ const completedBatchToasts = new Set<string>()
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const BACKEND_JOB_POLL_RETRY_MS = 3_000
 
+interface BackendResultOutput {
+  dataUrl?: string
+  imageId?: string
+  requestIndex: number
+  actualParams?: Partial<TaskParams>
+  revisedPrompt?: string
+  rawImageUrl?: string
+}
+
 function createOpenAITimeoutError(timeoutSeconds: number) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。`
+}
+
+function isTerminalTaskStatus(status: TaskStatus) {
+  return status === 'done' || status === 'error' || status === 'cancelled'
 }
 
 export function getCachedImage(id: string): string | undefined {
@@ -804,22 +818,8 @@ async function fetchBackendResultImage(record: { outputUrl: string }) {
 async function getBackendResultOutputs(
   result: NonNullable<BackendJobResult>,
   existingByRequestIndex?: Map<number, string[]>
-): Promise<Array<{
-  dataUrl?: string
-  imageId?: string
-  requestIndex: number
-  actualParams?: Partial<TaskParams>
-  revisedPrompt?: string
-  rawImageUrl?: string
-}>> {
-  const outputs: Array<{
-    dataUrl?: string
-    imageId?: string
-    requestIndex: number
-    actualParams?: Partial<TaskParams>
-    revisedPrompt?: string
-    rawImageUrl?: string
-  }> = []
+): Promise<BackendResultOutput[]> {
+  const outputs: BackendResultOutput[] = []
 
   if (result.records?.length) {
     for (let index = 0; index < result.records.length; index++) {
@@ -1489,14 +1489,14 @@ function updateBackendJobStateForDisplayTasks(task: TaskRecord, backendJob: Back
   const latestTask = useStore.getState().tasks.find((item) => item.id === task.id) || task
   const targets = latestTask.backendJobOwner && latestTask.batchId ? getBatchSiblings(latestTask) : [latestTask]
   for (const target of targets) {
-    const currentStatus = target.status
-    const isTerminal = currentStatus === 'done' || currentStatus === 'error' || currentStatus === 'cancelled'
+    const canResumeRecoverable = Boolean(target.backendRecoverable && (status === 'queued' || status === 'running'))
+    const preserveTerminalStatus = isTerminalTaskStatus(target.status) && !canResumeRecoverable
     updateTaskInStore(target.id, {
       backendJobId: backendJob.id,
-      ...(isTerminal ? {} : { status }),
+      ...(preserveTerminalStatus ? {} : { status }),
       queuePosition: backendJob.queuePosition,
       backendProgress: backendJob.progress || undefined,
-      backendRecoverable: false,
+      ...(preserveTerminalStatus && target.backendRecoverable ? {} : { backendRecoverable: false }),
     })
   }
 }
@@ -1654,7 +1654,7 @@ async function executeTask(taskId: string) {
       const latestCancelledTask = useStore.getState().tasks.find((item) => item.id === taskId) || task
       const targets = latestCancelledTask.backendJobOwner && latestCancelledTask.batchId ? getBatchSiblings(latestCancelledTask) : [latestCancelledTask]
       for (const target of targets) {
-        if (target.status === 'done' || target.status === 'error') {
+        if (isTerminalTaskStatus(target.status) && target.status !== 'cancelled') {
           continue
         }
         updateTaskInStore(target.id, {
@@ -1856,6 +1856,12 @@ async function executeTask(taskId: string) {
     const canResyncBackendJob = Boolean(syncRecoverableBackendJobId)
     const targets = latestTask.backendJobOwner && latestTask.batchId ? getBatchSiblings(latestTask) : [latestTask]
     for (const target of targets) {
+      if (
+        canResyncBackendJob &&
+        ((target.status === 'done' && target.outputImages?.length && !target.hiddenByRetry) || target.status === 'cancelled')
+      ) {
+        continue
+      }
       updateTaskInStore(target.id, {
         status: 'error',
         error: canResyncBackendJob
@@ -1922,15 +1928,26 @@ export async function retryTask(task: TaskRecord) {
   const recoverableJobId = task.backendRecoverable && (backendOwner.backendJobId || task.backendJobId)
   if (recoverableJobId) {
     const targets = backendOwner.backendJobOwner && backendOwner.batchId ? getBatchSiblings(backendOwner) : [task]
-    for (const target of targets) updateTaskInStore(target.id, {
-      status: 'running',
-      error: null,
-      backendJobId: recoverableJobId,
-      backendRecoverable: false,
-      finishedAt: null,
-      elapsed: null,
-      queuePosition: 0,
-    })
+    for (const target of targets) {
+      const preserveCompleted = target.status === 'done' && target.outputImages?.length && !target.hiddenByRetry
+      if (preserveCompleted || target.status === 'cancelled') {
+        updateTaskInStore(target.id, {
+          backendJobId: recoverableJobId,
+          backendRecoverable: target.id === backendOwner.id ? true : target.backendRecoverable,
+          queuePosition: 0,
+        })
+        continue
+      }
+      updateTaskInStore(target.id, {
+        status: 'running',
+        error: null,
+        backendJobId: recoverableJobId,
+        backendRecoverable: false,
+        finishedAt: null,
+        elapsed: null,
+        queuePosition: 0,
+      })
+    }
     executeTask(backendOwner.id)
     return
   }

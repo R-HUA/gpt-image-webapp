@@ -23,6 +23,11 @@ const PAGE_SIZE_MAX = 100
 const LOG_COMPONENT = 'gpt-image-backend'
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024 * 512
 const UPLOAD_BODY_MAX_BYTES = 1024 * 1024 * 64
+const PENDING_UPLOAD_TTL_MS = 30 * 60 * 1000
+const PENDING_UPLOAD_CLEANUP_INTERVAL_MS = 5 * 60 * 1000
+const MAX_PENDING_UPLOADS_PER_USER = 50
+const MAX_PENDING_UPLOAD_BYTES_PER_USER = 256 * 1024 * 1024
+const MAX_JOB_SNAPSHOTS = 1000
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -134,9 +139,8 @@ async function cleanPendingUploadsAtStartup() {
 function startPeriodicUploadCleaner() {
   const timer = setInterval(async () => {
     const now = Date.now()
-    const maxAge = 30 * 60 * 1000 // 30 minutes
     for (const [id, upload] of pendingUploads.entries()) {
-      if (now - upload.createdAt > maxAge) {
+      if (now - upload.createdAt > PENDING_UPLOAD_TTL_MS) {
         pendingUploads.delete(id)
         if (!upload.consumed) {
           await fs.unlink(upload.filePath).catch(() => {})
@@ -144,7 +148,7 @@ function startPeriodicUploadCleaner() {
         }
       }
     }
-  }, 5 * 60 * 1000)
+  }, PENDING_UPLOAD_CLEANUP_INTERVAL_MS)
   if (timer.unref) {
     timer.unref()
   }
@@ -335,6 +339,63 @@ function getJobView(job) {
   }
 }
 
+function getPendingUploadUsage(username) {
+  let count = 0
+  let bytes = 0
+  for (const item of pendingUploads.values()) {
+    if (item.username === username && !item.consumed) {
+      count++
+      bytes += item.size
+    }
+  }
+  return { count, bytes }
+}
+
+function getContentLength(req) {
+  const value = req.headers['content-length']
+  if (value == null) return null
+  const length = Number(value)
+  return Number.isFinite(length) && length >= 0 ? length : null
+}
+
+function getJobViewFromPersistedResults(jobId) {
+  const records = store.data.results
+    .filter((record) => record.jobId === jobId && !record.deleted)
+    .sort((a, b) => (a.requestIndex || 0) - (b.requestIndex || 0) || (a.createdAt || 0) - (b.createdAt || 0))
+  if (!records.length) return null
+  const username = records[0].username
+  const createdAt = Math.min(...records.map((record) => Number(record.createdAt || Date.now())))
+  const finishedAt = Math.max(...records.map((record) => Number(record.createdAt || Date.now())))
+  const requestIndexes = records.map((record, index) => record.requestIndex ?? index + 1)
+  return {
+    username,
+    job: {
+      id: jobId,
+      status: 'done',
+      queuePosition: 0,
+      createdAt,
+      startedAt: createdAt,
+      finishedAt,
+      error: null,
+      progress: null,
+      result: {
+        images: [],
+        actualParams: { n: records.length },
+        actualParamsList: records.map((record) => record.actualParams),
+        revisedPrompts: records.map((record) => record.revisedPrompt),
+        rawImageUrls: records.map((record) => record.rawImageUrl),
+        requestIndexes,
+        records: records.map((record, index) => ({
+          id: record.id,
+          outputUrl: record.outputUrl || `/api/gallery/${record.id}/image`,
+          thumbnailUrl: record.thumbnailUrl || `/api/gallery/${record.id}/thumbnail`,
+          requestIndex: requestIndexes[index],
+        })),
+      },
+    },
+  }
+}
+
 async function saveJobSnapshot(job) {
   try {
     const jobView = getJobView(job)
@@ -351,8 +412,8 @@ async function saveJobSnapshot(job) {
     } else {
       store.data.jobSnapshots.unshift(snapshot)
     }
-    if (store.data.jobSnapshots.length > 1000) {
-      store.data.jobSnapshots = store.data.jobSnapshots.slice(0, 1000)
+    if (store.data.jobSnapshots.length > MAX_JOB_SNAPSHOTS) {
+      store.data.jobSnapshots = store.data.jobSnapshots.slice(0, MAX_JOB_SNAPSHOTS)
     }
     await store.save()
     log('info', 'job.snapshot.saved', { jobId: job.id })
@@ -780,7 +841,7 @@ async function runJob(job) {
   }
 }
 
-function cancelJob(job) {
+async function cancelJob(job) {
   if (job.status === 'queued') {
     const idx = queue.findIndex((item) => item.id === job.id)
     if (idx >= 0) queue.splice(idx, 1)
@@ -788,7 +849,7 @@ function cancelJob(job) {
     job.finishedAt = Date.now()
     job.error = '请求已取消'
     log('info', 'job.cancelled', { jobId: job.id, username: job.username, status: 'queued' })
-    saveJobSnapshot(job)
+    await saveJobSnapshot(job)
     return true
   }
   return false
@@ -1061,24 +1122,17 @@ async function handleApi(req, res, url) {
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
       return sendJson(res, { error: '只支持 PNG/JPEG/WebP 图片上传' }, 415)
     }
-    const buffer = await readRawBody(req)
-    if (!buffer.length) return sendJson(res, { error: '上传图片为空' }, 400)
-
-    // Check user quota for pending uploads
-    let userPendingCount = 0
-    let userPendingSize = 0
-    for (const item of pendingUploads.values()) {
-      if (item.username === user.username && !item.consumed) {
-        userPendingCount++
-        userPendingSize += item.size
-      }
-    }
-    if (userPendingCount >= 50) {
+    const pendingUsage = getPendingUploadUsage(user.username)
+    if (pendingUsage.count >= MAX_PENDING_UPLOADS_PER_USER) {
       return sendJson(res, { error: '未消费的上传文件数量超过限制（最多 50 个），请先提交任务或等待过期清理' }, 400)
     }
-    if (userPendingSize + buffer.length > 256 * 1024 * 1024) {
+    const remainingBytes = MAX_PENDING_UPLOAD_BYTES_PER_USER - pendingUsage.bytes
+    const contentLength = getContentLength(req)
+    if (remainingBytes <= 0 || (contentLength != null && contentLength > remainingBytes)) {
       return sendJson(res, { error: '未消费的上传文件总大小超过限制（最多 256MB），请先提交任务或等待过期清理' }, 400)
     }
+    const buffer = await readRawBody(req, Math.min(UPLOAD_BODY_MAX_BYTES, remainingBytes))
+    if (!buffer.length) return sendJson(res, { error: '上传图片为空' }, 400)
 
     // Verify image using sharp
     try {
@@ -1174,6 +1228,13 @@ async function handleApi(req, res, url) {
         const { username, ...jobView } = snapshot
         return sendJson(res, { job: jobView })
       }
+      const restored = getJobViewFromPersistedResults(jobId)
+      if (restored) {
+        if (user.role !== 'admin' && restored.username !== user.username) {
+          return sendJson(res, { error: '任务不存在' }, 404)
+        }
+        return sendJson(res, { job: restored.job })
+      }
     }
 
     if (!job || (user.role !== 'admin' && job.username !== user.username)) return sendJson(res, { error: '任务不存在' }, 404)
@@ -1184,20 +1245,30 @@ async function handleApi(req, res, url) {
         if (['done', 'error', 'cancelled'].includes(job.status)) {
           return sendJson(res, { error: '只能取消未开始的子请求' }, 400)
         }
-        const currentExecuting = job.progress?.current || (job.status === 'running' ? 1 : 0)
-        const invalidIndexes = body.skipIndexes.map(Number).filter(idx => !Number.isInteger(idx) || idx <= 0 || idx <= currentExecuting)
+        const requestedSkips = body.skipIndexes.map(Number)
+        const currentExecuting = job.progress?.current ?? (job.status === 'running' ? 1 : 0)
+        const total = Number.isInteger(job.progress?.total) && job.progress.total > 0 ? job.progress.total : null
+        const invalidIndexes = requestedSkips.filter((idx) => (
+          !Number.isInteger(idx) ||
+          idx <= 0 ||
+          idx <= currentExecuting ||
+          (total != null && idx > total)
+        ))
         if (invalidIndexes.length > 0) {
           return sendJson(res, { error: '只能取消未开始的子请求' }, 400)
         }
-        const validSkips = body.skipIndexes.map(Number).filter(idx => Number.isInteger(idx) && idx > currentExecuting)
-        job.skipIndexes = [...new Set([...(job.skipIndexes || []), ...validSkips])]
-        await addAudit(user, 'job.skip_sub_request', { jobId: job.id, skipIndexes: validSkips }, req)
-        log('info', 'job.skip_indexes.updated', { ...requestLogDetails(req, user), jobId: job.id, skipIndexes: job.skipIndexes })
+        const existingSkips = new Set(job.skipIndexes || [])
+        const validSkips = [...new Set(requestedSkips.filter((idx) => !existingSkips.has(idx)))]
+        if (validSkips.length > 0) {
+          job.skipIndexes = [...new Set([...(job.skipIndexes || []), ...validSkips])]
+          await addAudit(user, 'job.skip_sub_request', { jobId: job.id, skipIndexes: validSkips }, req)
+          log('info', 'job.skip_indexes.updated', { ...requestLogDetails(req, user), jobId: job.id, skipIndexes: job.skipIndexes })
+        }
       }
       return sendJson(res, { job: getJobView(job) })
     }
     if (req.method === 'DELETE') {
-      if (!cancelJob(job)) return sendJson(res, { error: '只能取消排队中的请求' }, 409)
+      if (!await cancelJob(job)) return sendJson(res, { error: '只能取消排队中的请求' }, 409)
       await addAudit(user, 'job.cancel', { jobId: job.id }, req)
       log('info', 'job.cancel', { ...requestLogDetails(req, user), jobId: job.id })
       return sendJson(res, { job: getJobView(job) })

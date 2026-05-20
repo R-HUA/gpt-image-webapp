@@ -37,7 +37,7 @@ function BatchItemCard({ task, batchOwner }: { task: TaskRecord; batchOwner: Tas
 
   const status = statusConfig[task.status] || statusConfig.queued
   const canRetry = task.status === 'error'
-  const currentRunningIndex = batchOwner?.backendProgress?.current || (batchOwner?.status === 'running' ? 1 : 0)
+  const currentRunningIndex = batchOwner?.backendProgress?.current ?? (batchOwner?.status === 'running' ? 1 : 0)
   const isCurrentlyRunning = task.batchIndex === currentRunningIndex && (task.status === 'queued' || task.status === 'running')
   const isQueued = task.batchIndex && task.batchIndex > currentRunningIndex && (task.status === 'queued' || task.status === 'running')
   const canCancel = isQueued && batchOwner && task.batchIndex

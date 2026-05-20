@@ -958,4 +958,131 @@ describe('final sync output reuse and terminal status protection', () => {
     expect(resultRunning?.status).toBe('done')
     expect(resultRunning?.outputImages[0]).toMatch(/^stored-image-\d+$/)
   })
+
+  it('resyncs an error backend-recoverable task without creating a new backend job', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+
+    const recoverableTask = task({
+      id: 'task-error-recoverable',
+      status: 'error',
+      error: '后端任务已完成，但同步结果失败：HTTP 500',
+      backendJobId: 'backend-job-error-recoverable',
+      backendRecoverable: true,
+      createdAt: 1_000,
+      finishedAt: 2_000,
+      elapsed: 1_000,
+    })
+
+    getBackendJobMock.mockResolvedValueOnce({
+      job: {
+        id: 'backend-job-error-recoverable',
+        status: 'done',
+        queuePosition: 0,
+        createdAt: 1_000,
+        startedAt: 1_100,
+        finishedAt: 2_000,
+        error: null,
+        progress: null,
+        result: {
+          images: [],
+          actualParams: { n: 1 },
+          actualParamsList: [{ n: 1 }],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          records: [
+            { id: 'record-resync', outputUrl: '/api/gallery/record-resync/image', thumbnailUrl: '', requestIndex: 1 },
+          ],
+        },
+      },
+    })
+
+    await putTask(recoverableTask)
+    useStore.setState({ tasks: [recoverableTask] })
+
+    await initStore()
+    await flushAsyncTasks()
+
+    expect(useStore.getState().tasks.find((item) => item.id === recoverableTask.id)).toMatchObject({
+      status: 'done',
+      backendJobId: 'backend-job-error-recoverable',
+      backendRecoverable: false,
+      outputImages: [expect.stringMatching(/^stored-image-\d+$/)],
+    })
+    expect(backendJobs).toHaveLength(0)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps completed siblings done when final sync fails for an unfinished sibling', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('failed', { status: 500 })) as typeof fetch
+
+    const childDone = task({
+      id: 'task-final-sync-done',
+      status: 'done',
+      batch: true,
+      batchId: 'batch-final-sync-failure',
+      batchIndex: 1,
+      batchTotal: 2,
+      backendJobOwner: false,
+      backendJobId: 'backend-job-final-sync-failure',
+      outputImages: ['existing-stored-img'],
+      createdAt: 1_000,
+    })
+    const childOwner = task({
+      id: 'task-final-sync-owner',
+      status: 'running',
+      batch: true,
+      batchId: 'batch-final-sync-failure',
+      batchIndex: 2,
+      batchTotal: 2,
+      backendJobOwner: true,
+      backendJobId: 'backend-job-final-sync-failure',
+      createdAt: 1_001,
+      finishedAt: null,
+      elapsed: null,
+    })
+
+    getBackendJobMock.mockResolvedValueOnce({
+      job: {
+        id: 'backend-job-final-sync-failure',
+        status: 'done',
+        queuePosition: 0,
+        createdAt: 1_000,
+        startedAt: 1_100,
+        finishedAt: 2_000,
+        error: null,
+        progress: { total: 2, completed: 2, failed: 0, current: null },
+        result: {
+          images: [],
+          actualParams: { n: 2 },
+          actualParamsList: [{ n: 1 }, { n: 1 }],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          requestIndexes: [1, 2],
+          records: [
+            { id: 'record-done', outputUrl: '/api/gallery/record-done/image', thumbnailUrl: '', requestIndex: 1 },
+            { id: 'record-fails', outputUrl: '/api/gallery/record-fails/image', thumbnailUrl: '', requestIndex: 2 },
+          ],
+        },
+      },
+    })
+
+    await putTask(childDone)
+    await putTask(childOwner)
+    useStore.setState({ tasks: [childDone, childOwner] })
+
+    await initStore()
+    await flushAsyncTasks()
+
+    expect(useStore.getState().tasks.find((item) => item.id === childDone.id)).toMatchObject({
+      status: 'done',
+      outputImages: ['existing-stored-img'],
+      backendRecoverable: false,
+    })
+    expect(useStore.getState().tasks.find((item) => item.id === childOwner.id)).toMatchObject({
+      status: 'error',
+      backendJobId: 'backend-job-final-sync-failure',
+      backendRecoverable: true,
+    })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
 })
