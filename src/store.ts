@@ -801,17 +801,57 @@ async function fetchBackendResultImage(record: { outputUrl: string }) {
   return blobToDataUrl(await response.blob())
 }
 
-async function getBackendResultOutputs(result: NonNullable<BackendJobResult>) {
+async function getBackendResultOutputs(
+  result: NonNullable<BackendJobResult>,
+  existingByRequestIndex?: Map<number, string[]>
+): Promise<Array<{
+  dataUrl?: string
+  imageId?: string
+  requestIndex: number
+  actualParams?: Partial<TaskParams>
+  revisedPrompt?: string
+  rawImageUrl?: string
+}>> {
+  const outputs: Array<{
+    dataUrl?: string
+    imageId?: string
+    requestIndex: number
+    actualParams?: Partial<TaskParams>
+    revisedPrompt?: string
+    rawImageUrl?: string
+  }> = []
+
   if (result.records?.length) {
-    const dataUrls = await Promise.all(result.records.map(fetchBackendResultImage))
-    return dataUrls.map((dataUrl, index) => ({
-      dataUrl,
-      requestIndex: result.records?.[index]?.requestIndex ?? result.requestIndexes?.[index] ?? index + 1,
-      actualParams: result.actualParamsList?.[index] || result.actualParams,
-      revisedPrompt: result.revisedPrompts?.[index],
-      rawImageUrl: result.rawImageUrls?.[index],
-    }))
+    for (let index = 0; index < result.records.length; index++) {
+      const record = result.records[index]
+      const requestIndex = record.requestIndex ?? result.requestIndexes?.[index] ?? index + 1
+      const actualParams = result.actualParamsList?.[index] || result.actualParams
+      const revisedPrompt = result.revisedPrompts?.[index]
+      const rawImageUrl = result.rawImageUrls?.[index]
+
+      const existingIds = existingByRequestIndex?.get(requestIndex)
+      if (existingIds && existingIds.length > 0) {
+        outputs.push({
+          imageId: existingIds[0],
+          requestIndex,
+          actualParams,
+          revisedPrompt,
+          rawImageUrl,
+        })
+      } else {
+        const dataUrl = await fetchBackendResultImage(record)
+        outputs.push({
+          dataUrl,
+          requestIndex,
+          actualParams,
+          revisedPrompt,
+          rawImageUrl,
+        })
+      }
+    }
+    return outputs
   }
+
   return (result.images || []).map((dataUrl, index) => ({
     dataUrl,
     requestIndex: result.requestIndexes?.[index] ?? index + 1,
@@ -1449,9 +1489,11 @@ function updateBackendJobStateForDisplayTasks(task: TaskRecord, backendJob: Back
   const latestTask = useStore.getState().tasks.find((item) => item.id === task.id) || task
   const targets = latestTask.backendJobOwner && latestTask.batchId ? getBatchSiblings(latestTask) : [latestTask]
   for (const target of targets) {
+    const currentStatus = target.status
+    const isTerminal = currentStatus === 'done' || currentStatus === 'error' || currentStatus === 'cancelled'
     updateTaskInStore(target.id, {
       backendJobId: backendJob.id,
-      status,
+      ...(isTerminal ? {} : { status }),
       queuePosition: backendJob.queuePosition,
       backendProgress: backendJob.progress || undefined,
       backendRecoverable: false,
@@ -1558,7 +1600,7 @@ async function executeTask(taskId: string) {
           if (appliedRecordIds.has(record.id)) continue
           appliedRecordIds.add(record.id)
           const sibling = siblings.find((s) => s.batchIndex === record.requestIndex)
-          if (sibling && sibling.status !== 'done') {
+          if (sibling && sibling.status !== 'done' && sibling.status !== 'cancelled') {
             try {
               const imgRes = await fetch(record.outputUrl, { credentials: 'include' })
               if (imgRes.ok) {
@@ -1594,7 +1636,7 @@ async function executeTask(taskId: string) {
           if (appliedFailedIndexes.has(failure.requestIndex)) continue
           appliedFailedIndexes.add(failure.requestIndex)
           const sibling = siblings.find((s) => s.batchIndex === failure.requestIndex)
-          if (sibling && sibling.status !== 'done' && sibling.status !== 'error') {
+          if (sibling && sibling.status !== 'done' && sibling.status !== 'error' && sibling.status !== 'cancelled') {
             updateTaskInStore(sibling.id, {
               status: 'error',
               error: failure.message,
@@ -1612,6 +1654,9 @@ async function executeTask(taskId: string) {
       const latestCancelledTask = useStore.getState().tasks.find((item) => item.id === taskId) || task
       const targets = latestCancelledTask.backendJobOwner && latestCancelledTask.batchId ? getBatchSiblings(latestCancelledTask) : [latestCancelledTask]
       for (const target of targets) {
+        if (target.status === 'done' || target.status === 'error') {
+          continue
+        }
         updateTaskInStore(target.id, {
           status: 'cancelled',
           error: backendJob.error || '请求已取消',
@@ -1631,7 +1676,25 @@ async function executeTask(taskId: string) {
     const result = backendJob.result
 
     syncRecoverableBackendJobId = backendJob.id
-    const resultOutputs = await getBackendResultOutputs(result)
+
+    // Compile mapping of sibling request index -> existing imageIds to avoid re-fetching
+    const currentTaskState = useStore.getState().tasks.find((item) => item.id === taskId) || task
+    const existingByRequestIndex = new Map<number, string[]>()
+    if (currentTaskState.backendJobOwner && currentTaskState.batchId) {
+      const siblings = getBatchSiblings(currentTaskState)
+      for (const sibling of siblings) {
+        if (
+          sibling.status === 'done' &&
+          sibling.outputImages?.length &&
+          sibling.batchIndex &&
+          !sibling.hiddenByRetry
+        ) {
+          existingByRequestIndex.set(sibling.batchIndex, sibling.outputImages)
+        }
+      }
+    }
+
+    const resultOutputs = await getBackendResultOutputs(result, existingByRequestIndex)
     if (resultOutputs.length === 0) {
       throw new Error('后端任务未返回图片')
     }
@@ -1643,15 +1706,25 @@ async function executeTask(taskId: string) {
       rawImageUrl?: string
     }> = []
     for (const output of resultOutputs) {
-      const imgId = await storeImage(output.dataUrl, 'generated')
-      cacheImage(imgId, output.dataUrl)
-      storedOutputs.push({
-        imageId: imgId,
-        requestIndex: output.requestIndex,
-        actualParams: output.actualParams,
-        revisedPrompt: output.revisedPrompt,
-        rawImageUrl: output.rawImageUrl,
-      })
+      if (output.imageId) {
+        storedOutputs.push({
+          imageId: output.imageId,
+          requestIndex: output.requestIndex,
+          actualParams: output.actualParams,
+          revisedPrompt: output.revisedPrompt,
+          rawImageUrl: output.rawImageUrl,
+        })
+      } else if (output.dataUrl) {
+        const imgId = await storeImage(output.dataUrl, 'generated')
+        cacheImage(imgId, output.dataUrl)
+        storedOutputs.push({
+          imageId: imgId,
+          requestIndex: output.requestIndex,
+          actualParams: output.actualParams,
+          revisedPrompt: output.revisedPrompt,
+          rawImageUrl: output.rawImageUrl,
+        })
+      }
     }
 
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -1660,11 +1733,16 @@ async function executeTask(taskId: string) {
     if (latestBeforeUpdate.backendJobOwner && latestBeforeUpdate.batchId) {
       const siblings = getBatchSiblings(latestBeforeUpdate)
       const errorsByIndex = new Map((result.requestErrors || []).map((item) => [item.requestIndex, item]))
+      const skippedByIndex = new Map((result.skippedRequests || []).map((item) => [item.requestIndex, item]))
       for (const sibling of siblings) {
+        if (sibling.status === 'cancelled') continue
+        if (sibling.status === 'done' && sibling.outputImages?.length && !sibling.hiddenByRetry) continue
+
         const requestIndex = sibling.batchIndex || 1
         const outputsForTask = storedOutputs.filter((item) => item.requestIndex === requestIndex)
         const outputIds = outputsForTask.map((item) => item.imageId)
         const requestError = errorsByIndex.get(requestIndex)
+        const requestSkipped = skippedByIndex.get(requestIndex)
         if (outputIds.length > 0) {
           const actualParamsList = outputsForTask.map((item) => item.actualParams)
           const actualParams = { ...(outputsForTask[0]?.actualParams || result.actualParams), n: outputIds.length }
@@ -1700,6 +1778,18 @@ async function executeTask(taskId: string) {
             error: requestError.message,
             requestErrors: [requestError],
             failedCount: 1,
+            finishedAt: backendJob.finishedAt ?? Date.now(),
+            elapsed: (backendJob.finishedAt ?? Date.now()) - sibling.createdAt,
+            falRecoverable: false,
+            customRecoverable: false,
+            backendRecoverable: false,
+            backendProgress: undefined,
+            queuePosition: 0,
+          })
+        } else if (requestSkipped) {
+          updateTaskInStore(sibling.id, {
+            status: 'cancelled',
+            error: '请求已取消',
             finishedAt: backendJob.finishedAt ?? Date.now(),
             elapsed: (backendJob.finishedAt ?? Date.now()) - sibling.createdAt,
             falRecoverable: false,

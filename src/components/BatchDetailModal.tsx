@@ -37,7 +37,10 @@ function BatchItemCard({ task, batchOwner }: { task: TaskRecord; batchOwner: Tas
 
   const status = statusConfig[task.status] || statusConfig.queued
   const canRetry = task.status === 'error'
-  const canCancel = (task.status === 'queued' || task.status === 'running') && batchOwner && task.batchIndex
+  const currentRunningIndex = batchOwner?.backendProgress?.current || (batchOwner?.status === 'running' ? 1 : 0)
+  const isCurrentlyRunning = task.batchIndex === currentRunningIndex && (task.status === 'queued' || task.status === 'running')
+  const isQueued = task.batchIndex && task.batchIndex > currentRunningIndex && (task.status === 'queued' || task.status === 'running')
+  const canCancel = isQueued && batchOwner && task.batchIndex
 
   return (
     <div className={`flex items-center gap-3 rounded-xl border p-3 transition ${
@@ -112,6 +115,17 @@ function BatchItemCard({ task, batchOwner }: { task: TaskRecord; batchOwner: Tas
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        )}
+        {isCurrentlyRunning && (
+          <button
+            disabled
+            className="p-1.5 rounded-lg text-gray-300 dark:text-gray-700 cursor-not-allowed"
+            title="无法取消正在生成的子请求"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         )}

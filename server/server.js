@@ -117,6 +117,39 @@ async function ensureDirs() {
   await fs.mkdir(path.resolve(rootDir, serverConfig.batchUploadDir), { recursive: true })
 }
 
+async function cleanPendingUploadsAtStartup() {
+  try {
+    const baseDir = path.resolve(rootDir, serverConfig.batchUploadDir)
+    const users = await fs.readdir(baseDir).catch(() => [])
+    for (const userSegment of users) {
+      const pendingDir = path.join(baseDir, userSegment, 'pending')
+      await fs.rm(pendingDir, { recursive: true, force: true }).catch(() => {})
+    }
+    log('info', 'upload.cleanup.startup.done')
+  } catch (err) {
+    logError('upload.cleanup.startup.failed', err)
+  }
+}
+
+function startPeriodicUploadCleaner() {
+  const timer = setInterval(async () => {
+    const now = Date.now()
+    const maxAge = 30 * 60 * 1000 // 30 minutes
+    for (const [id, upload] of pendingUploads.entries()) {
+      if (now - upload.createdAt > maxAge) {
+        pendingUploads.delete(id)
+        if (!upload.consumed) {
+          await fs.unlink(upload.filePath).catch(() => {})
+          log('info', 'upload.cleanup.periodic', { uploadId: id, filePath: upload.filePath })
+        }
+      }
+    }
+  }, 5 * 60 * 1000)
+  if (timer.unref) {
+    timer.unref()
+  }
+}
+
 function getCookie(req, name) {
   const cookie = req.headers.cookie || ''
   for (const part of cookie.split(';')) {
@@ -302,6 +335,32 @@ function getJobView(job) {
   }
 }
 
+async function saveJobSnapshot(job) {
+  try {
+    const jobView = getJobView(job)
+    const snapshot = {
+      ...jobView,
+      username: job.username,
+    }
+    if (!store.data.jobSnapshots) {
+      store.data.jobSnapshots = []
+    }
+    const idx = store.data.jobSnapshots.findIndex((s) => s.id === job.id)
+    if (idx >= 0) {
+      store.data.jobSnapshots[idx] = snapshot
+    } else {
+      store.data.jobSnapshots.unshift(snapshot)
+    }
+    if (store.data.jobSnapshots.length > 1000) {
+      store.data.jobSnapshots = store.data.jobSnapshots.slice(0, 1000)
+    }
+    await store.save()
+    log('info', 'job.snapshot.saved', { jobId: job.id })
+  } catch (err) {
+    logError('job.snapshot.save.failed', err, { jobId: job.id })
+  }
+}
+
 async function saveDataUrl(dataUrl, dir, basename) {
   const { buffer, ext, mime } = dataUrlToBuffer(dataUrl)
   await fs.mkdir(dir, { recursive: true })
@@ -369,6 +428,7 @@ async function persistPendingBatchUploads(job, uploadIds) {
     upload.jobId = job.id
     upload.inputIndex = i + 1
     upload.consumed = true
+    pendingUploads.delete(upload.id)
     store.data.batchUploads.unshift({
       id: upload.id,
       jobId: job.id,
@@ -662,6 +722,15 @@ async function runJob(job) {
     }
 
     // Results already persisted per sub-request above; build final result from accumulated records
+    const skippedRequests = []
+    if (Array.isArray(job.skipIndexes)) {
+      for (let i = 0; i < requests.length; i++) {
+        if (job.skipIndexes.includes(i + 1)) {
+          skippedRequests.push({ requestIndex: i + 1, message: '已取消' })
+        }
+      }
+    }
+
     const result = {
       images: [],
       actualParams: { n: successImageCount },
@@ -669,6 +738,9 @@ async function runJob(job) {
         partialFailure: true,
         failedCount: requestErrors.length,
         requestErrors,
+      } : {}),
+      ...(skippedRequests.length ? {
+        skippedRequests,
       } : {}),
     }
     job.status = 'done'
@@ -692,6 +764,7 @@ async function runJob(job) {
       failedCount: requestErrors.length,
       skippedCount: job.progress?.skipped || 0,
     })
+    await saveJobSnapshot(job)
   } catch (err) {
     job.status = job.status === 'cancelled' ? 'cancelled' : 'error'
     job.error = err?.name === 'AbortError' ? '请求已取消' : err instanceof Error ? err.message : String(err)
@@ -703,6 +776,7 @@ async function runJob(job) {
       status: job.status,
       durationMs: job.finishedAt - startedAt,
     })
+    await saveJobSnapshot(job)
   }
 }
 
@@ -714,6 +788,7 @@ function cancelJob(job) {
     job.finishedAt = Date.now()
     job.error = '请求已取消'
     log('info', 'job.cancelled', { jobId: job.id, username: job.username, status: 'queued' })
+    saveJobSnapshot(job)
     return true
   }
   return false
@@ -988,6 +1063,30 @@ async function handleApi(req, res, url) {
     }
     const buffer = await readRawBody(req)
     if (!buffer.length) return sendJson(res, { error: '上传图片为空' }, 400)
+
+    // Check user quota for pending uploads
+    let userPendingCount = 0
+    let userPendingSize = 0
+    for (const item of pendingUploads.values()) {
+      if (item.username === user.username && !item.consumed) {
+        userPendingCount++
+        userPendingSize += item.size
+      }
+    }
+    if (userPendingCount >= 50) {
+      return sendJson(res, { error: '未消费的上传文件数量超过限制（最多 50 个），请先提交任务或等待过期清理' }, 400)
+    }
+    if (userPendingSize + buffer.length > 256 * 1024 * 1024) {
+      return sendJson(res, { error: '未消费的上传文件总大小超过限制（最多 256MB），请先提交任务或等待过期清理' }, 400)
+    }
+
+    // Verify image using sharp
+    try {
+      await sharp(buffer).metadata()
+    } catch (err) {
+      return sendJson(res, { error: '无效的图片文件或格式不支持' }, 400)
+    }
+
     const uploadId = id('upload')
     const dir = path.resolve(rootDir, serverConfig.batchUploadDir, safeSegment(user.username), 'pending')
     const saved = await saveUploadBuffer(buffer, mime, dir, `${dateStamp()}_${uploadId}`)
@@ -1063,13 +1162,36 @@ async function handleApi(req, res, url) {
     if (!user) return
     const jobId = decodePathParam(res, jobMatch[1], '任务 ID')
     if (jobId == null) return
-    const job = jobs.get(jobId)
+    let job = jobs.get(jobId)
+
+    if (!job && req.method === 'GET') {
+      const snapshots = store.data.jobSnapshots || []
+      const snapshot = snapshots.find((s) => s.id === jobId)
+      if (snapshot) {
+        if (user.role !== 'admin' && snapshot.username !== user.username) {
+          return sendJson(res, { error: '任务不存在' }, 404)
+        }
+        const { username, ...jobView } = snapshot
+        return sendJson(res, { job: jobView })
+      }
+    }
+
     if (!job || (user.role !== 'admin' && job.username !== user.username)) return sendJson(res, { error: '任务不存在' }, 404)
     if (req.method === 'GET') return sendJson(res, { job: getJobView(job) })
     if (req.method === 'PATCH') {
       const body = await readJson(req)
       if (Array.isArray(body.skipIndexes)) {
-        job.skipIndexes = [...new Set([...(job.skipIndexes || []), ...body.skipIndexes.map(Number).filter(Number.isFinite)])]
+        if (['done', 'error', 'cancelled'].includes(job.status)) {
+          return sendJson(res, { error: '只能取消未开始的子请求' }, 400)
+        }
+        const currentExecuting = job.progress?.current || (job.status === 'running' ? 1 : 0)
+        const invalidIndexes = body.skipIndexes.map(Number).filter(idx => !Number.isInteger(idx) || idx <= 0 || idx <= currentExecuting)
+        if (invalidIndexes.length > 0) {
+          return sendJson(res, { error: '只能取消未开始的子请求' }, 400)
+        }
+        const validSkips = body.skipIndexes.map(Number).filter(idx => Number.isInteger(idx) && idx > currentExecuting)
+        job.skipIndexes = [...new Set([...(job.skipIndexes || []), ...validSkips])]
+        await addAudit(user, 'job.skip_sub_request', { jobId: job.id, skipIndexes: validSkips }, req)
         log('info', 'job.skip_indexes.updated', { ...requestLogDetails(req, user), jobId: job.id, skipIndexes: job.skipIndexes })
       }
       return sendJson(res, { job: getJobView(job) })
@@ -1149,6 +1271,8 @@ async function handleRequest(req, res) {
 
 await store.init()
 await ensureDirs()
+await cleanPendingUploadsAtStartup()
+startPeriodicUploadCleaner()
 await bootstrapAdmin()
 
 http.createServer(handleRequest).listen(serverConfig.port, serverConfig.host, () => {

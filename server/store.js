@@ -21,6 +21,7 @@ const EMPTY_DB = {
   results: [],
   batchUploads: [],
   auditLogs: [],
+  jobSnapshots: [],
 }
 
 export class JsonStore {
@@ -58,6 +59,7 @@ export class JsonStore {
       results: Array.isArray(data?.results) ? data.results : [],
       batchUploads: Array.isArray(data?.batchUploads) ? data.batchUploads : [],
       auditLogs: Array.isArray(data?.auditLogs) ? data.auditLogs : [],
+      jobSnapshots: Array.isArray(data?.jobSnapshots) ? data.jobSnapshots : [],
     }
   }
 

@@ -32,6 +32,7 @@ export interface BackendJobResult {
   partialFailure?: boolean
   failedCount?: number
   requestErrors?: Array<{ requestIndex: number; message: string }>
+  skippedRequests?: Array<{ requestIndex: number; message: string }>
   records?: Array<{ id: string; outputUrl: string; thumbnailUrl: string; requestIndex?: number }>
 }
 

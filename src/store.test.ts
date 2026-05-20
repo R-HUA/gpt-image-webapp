@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { StoredImage, StoredImageThumbnail, TaskRecord } from './types'
@@ -761,5 +761,201 @@ describe('reused task API profile', () => {
       cancelText: '放弃提交',
     }))
     expect(state.showSettings).toBe(false)
+  })
+})
+
+describe('final sync output reuse and terminal status protection', () => {
+  const originalFetch = globalThis.fetch
+  
+  beforeEach(async () => {
+    backendJobs.length = 0
+    backendUploads.length = 0
+    getBackendJobMock.mockReset()
+    await clearTasks()
+    await clearImages()
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key' },
+      tasks: [],
+      toast: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('reuses already-downloaded sibling outputs and avoids duplicate downloads', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+
+    const childOwner = task({
+      id: 'task-owner',
+      status: 'running',
+      batch: true,
+      batchId: 'batch-sync-test',
+      batchIndex: 1,
+      batchTotal: 3,
+      backendJobOwner: true,
+      backendJobId: 'backend-job-sync-test',
+      createdAt: 1_000,
+    })
+    const childRunning = task({
+      id: 'task-running-sibling',
+      status: 'running',
+      batch: true,
+      batchId: 'batch-sync-test',
+      batchIndex: 2,
+      batchTotal: 3,
+      backendJobOwner: false,
+      backendJobId: 'backend-job-sync-test',
+      createdAt: 1_001,
+    })
+    const childDone = task({
+      id: 'task-done-sibling',
+      status: 'done',
+      batch: true,
+      batchId: 'batch-sync-test',
+      batchIndex: 3,
+      batchTotal: 3,
+      backendJobOwner: false,
+      backendJobId: 'backend-job-sync-test',
+      outputImages: ['existing-stored-img'],
+      createdAt: 1_002,
+    })
+
+    getBackendJobMock.mockResolvedValueOnce({
+      job: {
+        id: 'backend-job-sync-test',
+        status: 'done',
+        queuePosition: 0,
+        createdAt: 1_000,
+        startedAt: 1_100,
+        finishedAt: 2_000,
+        error: null,
+        progress: { total: 3, completed: 3, failed: 0, current: null },
+        result: {
+          images: [],
+          actualParams: { n: 3 },
+          actualParamsList: [{ n: 1 }, { n: 1 }, { n: 1 }],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          requestIndexes: [1, 2, 3],
+          records: [
+            { id: 'record-a', outputUrl: '/api/gallery/record-a/image', thumbnailUrl: '', requestIndex: 1 },
+            { id: 'record-b', outputUrl: '/api/gallery/record-b/image', thumbnailUrl: '', requestIndex: 2 },
+            { id: 'record-c', outputUrl: '/api/gallery/record-c/image', thumbnailUrl: '', requestIndex: 3 },
+          ],
+        },
+      },
+    })
+
+    await putTask(childOwner)
+    await putTask(childRunning)
+    await putTask(childDone)
+    useStore.setState({ tasks: [childOwner, childRunning, childDone] })
+
+    await initStore()
+    await flushAsyncTasks()
+
+    const completedOwner = useStore.getState().tasks.find((item) => item.id === childOwner.id)
+    const completedRunning = useStore.getState().tasks.find((item) => item.id === childRunning.id)
+    const completedDone = useStore.getState().tasks.find((item) => item.id === childDone.id)
+
+    expect(completedDone?.outputImages).toEqual(['existing-stored-img'])
+    expect(completedDone?.status).toBe('done')
+
+    expect(completedOwner?.status).toBe('done')
+    expect(completedOwner?.outputImages[0]).toMatch(/^stored-image-\d+$/)
+    
+    expect(completedRunning?.status).toBe('done')
+    expect(completedRunning?.outputImages[0]).toMatch(/^stored-image-\d+$/)
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('protects terminal sibling statuses from being overridden during polling and final sync', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(new Blob(['image-bytes'], { type: 'image/png' }))) as typeof fetch
+
+    const childDone = task({
+      id: 'task-sibling-done',
+      status: 'done',
+      batch: true,
+      batchId: 'batch-protect-test',
+      batchIndex: 1,
+      batchTotal: 3,
+      backendJobOwner: false,
+      backendJobId: 'backend-job-protect-test',
+      outputImages: ['existing-stored-img'],
+      createdAt: 1_000,
+    })
+    const childCancelled = task({
+      id: 'task-sibling-cancelled',
+      status: 'cancelled',
+      batch: true,
+      batchId: 'batch-protect-test',
+      batchIndex: 2,
+      batchTotal: 3,
+      backendJobOwner: false,
+      backendJobId: 'backend-job-protect-test',
+      createdAt: 1_001,
+    })
+    const childRunningOwner = task({
+      id: 'task-sibling-running-owner',
+      status: 'running',
+      batch: true,
+      batchId: 'batch-protect-test',
+      batchIndex: 3,
+      batchTotal: 3,
+      backendJobOwner: true,
+      backendJobId: 'backend-job-protect-test',
+      createdAt: 1_002,
+    })
+
+    getBackendJobMock.mockResolvedValueOnce({
+      job: {
+        id: 'backend-job-protect-test',
+        status: 'done',
+        queuePosition: 0,
+        createdAt: 1_000,
+        startedAt: 1_100,
+        finishedAt: 2_000,
+        error: null,
+        progress: { total: 3, completed: 3, failed: 0, current: null },
+        result: {
+          images: [],
+          actualParams: { n: 3 },
+          actualParamsList: [{ n: 1 }, { n: 1 }, { n: 1 }],
+          revisedPrompts: [],
+          rawImageUrls: [],
+          requestIndexes: [1, 2, 3],
+          records: [
+            { id: 'record-a', outputUrl: '/api/gallery/record-a/image', thumbnailUrl: '', requestIndex: 1 },
+            { id: 'record-b', outputUrl: '/api/gallery/record-b/image', thumbnailUrl: '', requestIndex: 2 },
+            { id: 'record-c', outputUrl: '/api/gallery/record-c/image', thumbnailUrl: '', requestIndex: 3 },
+          ],
+        },
+      },
+    })
+
+    await putTask(childDone)
+    await putTask(childCancelled)
+    await putTask(childRunningOwner)
+    useStore.setState({ tasks: [childDone, childCancelled, childRunningOwner] })
+
+    await initStore()
+    await flushAsyncTasks()
+
+    const resultDone = useStore.getState().tasks.find((item) => item.id === childDone.id)
+    const resultCancelled = useStore.getState().tasks.find((item) => item.id === childCancelled.id)
+    const resultRunning = useStore.getState().tasks.find((item) => item.id === childRunningOwner.id)
+
+    expect(resultDone?.status).toBe('done')
+    expect(resultDone?.outputImages).toEqual(['existing-stored-img'])
+
+    expect(resultCancelled?.status).toBe('cancelled')
+    expect(resultCancelled?.outputImages).toEqual([])
+
+    expect(resultRunning?.status).toBe('done')
+    expect(resultRunning?.outputImages[0]).toMatch(/^stored-image-\d+$/)
   })
 })
