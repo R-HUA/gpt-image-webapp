@@ -1,170 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { deleteGalleryResult, listGallery, listUsers } from '../lib/backend'
 import type { BackendGalleryRecord, BackendUser } from '../lib/backend'
-
-function GalleryLightbox({
-  record,
-  records,
-  onClose,
-  onNavigate,
-  canAdmin,
-  onDelete,
-}: {
-  record: BackendGalleryRecord
-  records: BackendGalleryRecord[]
-  onClose: () => void
-  onNavigate: (record: BackendGalleryRecord) => void
-  canAdmin: boolean
-  onDelete: (record: BackendGalleryRecord) => void
-}) {
-  const currentIndex = records.findIndex((r) => r.id === record.id)
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
-  const [swipeOffset, setSwipeOffset] = useState(0)
-  const [isSwiping, setIsSwiping] = useState(false)
-
-  const goTo = useCallback((dir: -1 | 1) => {
-    const nextIdx = currentIndex + dir
-    if (nextIdx >= 0 && nextIdx < records.length) {
-      onNavigate(records[nextIdx])
-    }
-  }, [currentIndex, records, onNavigate])
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-      if (e.key === 'ArrowLeft') goTo(-1)
-      if (e.key === 'ArrowRight') goTo(1)
-    }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [onClose, goTo])
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-    setIsSwiping(true)
-  }
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!touchStartRef.current) return
-    const dx = e.touches[0].clientX - touchStartRef.current.x
-    setSwipeOffset(dx)
-  }
-
-  const handleTouchEnd = () => {
-    setIsSwiping(false)
-    if (Math.abs(swipeOffset) > 60) {
-      goTo(swipeOffset > 0 ? -1 : 1)
-    }
-    setSwipeOffset(0)
-    touchStartRef.current = null
-  }
-
-  const handleDownload = async () => {
-    try {
-      const res = await fetch(record.outputUrl, { credentials: 'include' })
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `gallery-${record.id}.${blob.type.split('/')[1] || 'png'}`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch {}
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col" onClick={onClose}>
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-3 safe-area-top" onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-        <span className="text-white/50 text-sm">{currentIndex + 1} / {records.length}</span>
-        <div className="flex items-center gap-1">
-          <button onClick={handleDownload} className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition" title="下载">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-          </button>
-          {canAdmin && !record.deleted && (
-            <button
-              onClick={() => onDelete(record)}
-              className="p-2 rounded-lg text-red-400/70 hover:text-red-400 hover:bg-red-500/10 transition"
-              title="删除"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Image area with swipe */}
-      <div
-        className="flex-1 flex items-center justify-center overflow-hidden relative"
-        onClick={(e) => e.stopPropagation()}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        {/* Nav arrows (desktop) */}
-        {currentIndex > 0 && (
-          <button
-            onClick={() => goTo(-1)}
-            className="hidden sm:flex absolute left-4 z-10 w-10 h-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white transition"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-        )}
-        {currentIndex < records.length - 1 && (
-          <button
-            onClick={() => goTo(1)}
-            className="hidden sm:flex absolute right-4 z-10 w-10 h-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white transition"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        )}
-
-        <img
-          src={record.outputUrl}
-          className={`max-h-full max-w-full object-contain select-none ${record.deleted ? 'opacity-45 grayscale' : ''}`}
-          alt=""
-          style={{
-            transform: isSwiping ? `translateX(${swipeOffset}px)` : undefined,
-            transition: isSwiping ? 'none' : 'transform 0.2s ease',
-          }}
-          draggable={false}
-        />
-      </div>
-
-      {/* Bottom info panel */}
-      <div
-        className="bg-black/80 backdrop-blur-md px-5 py-4 safe-area-bottom"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <p className="text-sm text-white/90 leading-relaxed line-clamp-3 mb-2">{record.prompt || '(无提示词)'}</p>
-        {record.revisedPrompt && (
-          <p className="text-xs text-white/50 line-clamp-2 mb-2">改写: {record.revisedPrompt}</p>
-        )}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/40">
-          <span>{record.username}</span>
-          <span>{record.apiModel || '-'}</span>
-          <span>{new Date(record.createdAt).toLocaleString()}</span>
-          {record.deleted && <span className="text-red-400">已删除</span>}
-        </div>
-      </div>
-    </div>
-  )
-}
+import GalleryDetailModal from './GalleryDetailModal'
 
 export default function GalleryPage({ user, onBack }: { user: BackendUser | null; onBack: () => void }) {
   const [records, setRecords] = useState<BackendGalleryRecord[]>([])
@@ -315,7 +152,7 @@ export default function GalleryPage({ user, onBack }: { user: BackendUser | null
               </div>
               {/* Mobile: always show prompt below */}
               <div className="p-2 sm:hidden">
-                <p className="line-clamp-2 text-[11px] text-gray-600 dark:text-gray-400 leading-tight">{record.prompt || '(无提示词)'}</p>
+                <p className="line-clamp-1 text-[11px] text-gray-600 dark:text-gray-400 leading-tight">{record.prompt || '(无提示词)'}</p>
               </div>
             </button>
           ))}
@@ -343,9 +180,9 @@ export default function GalleryPage({ user, onBack }: { user: BackendUser | null
         </div>
       </div>
 
-      {/* Lightbox */}
+      {/* Detail Modal */}
       {selected && (
-        <GalleryLightbox
+        <GalleryDetailModal
           record={selected}
           records={records}
           onClose={() => setSelected(null)}

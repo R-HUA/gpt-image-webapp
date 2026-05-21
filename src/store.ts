@@ -1355,6 +1355,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 || serverImageBatchMode })
+  const isCodexCliBatch = batchMode && !serverImageBatchMode && orderedInputImages.length === 0 && activeProfile.codexCli
   const submittedParams = (batchMode || serverImageBatchMode)
     ? { ...normalizedParams, n: 1 }
     : normalizedParams
@@ -1367,13 +1368,15 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const isBatchTask = batchMode || serverImageBatchMode
-  const submittedBatchCount = isBatchTask && !serverImageBatchMode && orderedInputImages.length === 0 ? batchCount : undefined
+  const submittedBatchCount = isBatchTask && !serverImageBatchMode && orderedInputImages.length === 0
+    ? (isCodexCliBatch ? params.n : batchCount)
+    : undefined
   const batchTotal = isBatchTask
     ? serverImageBatchMode
       ? undefined
       : orderedInputImages.length > 0
       ? orderedInputImages.length
-      : batchCount
+      : (isCodexCliBatch ? params.n : batchCount)
     : undefined
   const batchId = isBatchTask && batchTotal && batchTotal > 1 ? genId() : undefined
   const taskInputGroups = isBatchTask
@@ -1381,7 +1384,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       ? [[] as InputImage[]]
       : orderedInputImages.length > 0
       ? orderedInputImages.map((img) => [img])
-      : Array.from({ length: batchCount }, () => [] as InputImage[])
+      : Array.from({ length: isCodexCliBatch ? params.n : batchCount }, () => [] as InputImage[])
     : [orderedInputImages]
   const createdAt = Date.now()
   const tasks = taskInputGroups.map((group, index): TaskRecord => ({

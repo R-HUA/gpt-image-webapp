@@ -43,13 +43,13 @@ function BatchItemCard({ task, batchOwner }: { task: TaskRecord; batchOwner: Tas
   const canCancel = isQueued && batchOwner && task.batchIndex
 
   return (
-    <div className={`flex items-center gap-3 rounded-xl border p-3 transition ${
-      task.status === 'running' ? 'border-blue-300 dark:border-blue-500/40' :
+    <div className={`flex items-center gap-3 rounded-2xl border p-3 transition hover:shadow-sm hover:border-gray-300 dark:hover:border-white/20 ${
+      task.status === 'running' ? 'border-blue-300 dark:border-blue-500/40 shadow-sm' :
       task.status === 'error' ? 'border-red-200 dark:border-red-500/30' :
       'border-gray-200 dark:border-white/[0.08]'
-    } bg-white dark:bg-gray-900`}>
+    } bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm`}>
       {/* Thumbnail / Status icon */}
-      <div className="w-14 h-14 rounded-lg overflow-hidden bg-gray-100 dark:bg-black/20 flex-shrink-0 flex items-center justify-center">
+      <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-100 dark:bg-black/20 flex-shrink-0 flex items-center justify-center ring-1 ring-black/5 dark:ring-white/5">
         {task.status === 'done' && thumbSrc ? (
           <img
             src={thumbSrc}
@@ -95,7 +95,7 @@ function BatchItemCard({ task, batchOwner }: { task: TaskRecord; batchOwner: Tas
         {task.error && task.status === 'error' && (
           <p className="text-xs text-red-500 dark:text-red-400 line-clamp-2">{task.error}</p>
         )}
-        {task.status === 'done' && (
+        {(task.status === 'done' || task.status === 'error') && (
           <button
             onClick={() => setDetailTaskId(task.id)}
             className="text-xs text-blue-500 hover:text-blue-600 transition"
@@ -164,6 +164,7 @@ export default function BatchDetailModal() {
   const doneCount = visibleTasks.filter((t) => t.status === 'done' && !t.hiddenByRetry).length
   const errorCount = visibleTasks.filter((t) => t.status === 'error' && !t.hiddenByRetry).length
   const runningCount = visibleTasks.filter((t) => (t.status === 'running' || t.status === 'queued') && !t.hiddenByRetry).length
+  const cancelledCount = visibleTasks.filter((t) => t.status === 'cancelled' && !t.hiddenByRetry).length
   const total = allBatchTasks.filter((t) => !t.hiddenByRetry).length
 
   return (
@@ -172,11 +173,11 @@ export default function BatchDetailModal() {
       onClick={() => setBatchDetailBatchId(null)}
     >
       <div
-        className="w-full sm:max-w-lg max-h-[85vh] sm:max-h-[80vh] bg-gray-50 dark:bg-gray-950 rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col shadow-2xl"
+        className="w-full sm:max-w-lg max-h-[85vh] sm:max-h-[80vh] bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-t-2xl sm:rounded-3xl overflow-hidden flex flex-col shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10 pb-[max(0px,var(--safe-area-bottom))]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-white/[0.08] bg-white/50 dark:bg-gray-900/50">
           <div>
             <h2 className="text-base font-bold text-gray-900 dark:text-white">批次详情</h2>
             <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -196,12 +197,18 @@ export default function BatchDetailModal() {
                   {runningCount} 进行中
                 </span>
               )}
+              {cancelledCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                  {cancelledCount} 已取消
+                </span>
+              )}
               <span className="text-gray-400">共 {total} 项</span>
             </div>
           </div>
           <button
             onClick={() => setBatchDetailBatchId(null)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.06] text-gray-400 transition"
+            className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -211,9 +218,9 @@ export default function BatchDetailModal() {
 
         {/* Progress bar */}
         {total > 0 && (
-          <div className="h-1 bg-gray-200 dark:bg-gray-800">
+          <div className="h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full mx-4 mt-3 overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-500"
+              className="h-full bg-gray-900 dark:bg-white transition-all duration-500 rounded-full"
               style={{ width: `${(doneCount / total) * 100}%` }}
             />
           </div>
