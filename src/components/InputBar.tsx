@@ -4,7 +4,7 @@ import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultip
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
+import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionPartSerializedText, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -173,6 +173,19 @@ function getContentEditablePlainText(el: HTMLElement): string {
   }
   el.childNodes.forEach(appendNodeText)
   return text.replace(/\r\n?/g, '\n')
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function escapeHtmlAttribute(text: string): string {
+  return escapeHtmlText(text)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function syncMentionTagSelection(el: HTMLElement) {
@@ -1064,8 +1077,8 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
     const html = prompt
       ? parts.map((part) =>
           part.type === 'mention'
-            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${getSelectedImageMentionLabel(part.imageIndex ?? 0)}">${part.text}</span>`
-            : part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${escapeHtmlAttribute(getPromptMentionPartSerializedText(part))}">${escapeHtmlText(part.text)}</span>`
+            : escapeHtmlText(part.text)
         ).join('')
       : ''
     if (el.innerHTML !== html) {

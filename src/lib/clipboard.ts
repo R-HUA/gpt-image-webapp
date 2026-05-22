@@ -15,14 +15,22 @@ export async function copyTextToClipboard(text: string) {
   throw asyncClipboardError ?? new Error('Clipboard API is not available')
 }
 
-export async function copyBlobToClipboard(blob: Blob | Promise<Blob>): Promise<'image'> {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    throw new Error('Clipboard image API is not available')
+export async function copyBlobToClipboard(blob: Blob | Promise<Blob>): Promise<'image' | 'data-url'> {
+  const resolvedBlob = await Promise.resolve(blob)
+  const clipboard = navigator.clipboard as (Clipboard & { write?: unknown }) | undefined
+
+  if (clipboard && typeof clipboard.write === 'function' && typeof ClipboardItem !== 'undefined') {
+    try {
+      await writeImageBlobToClipboard(resolvedBlob)
+      return 'image'
+    } catch {
+      // Fall back to a text Data URL for browsers that expose the image
+      // clipboard surface but reject the concrete image type.
+    }
   }
 
-  const resolvedBlob = await Promise.resolve(blob)
-  await writeImageBlobToClipboard(resolvedBlob)
-  return 'image'
+  await copyTextToClipboard(await blobToDataUrl(resolvedBlob))
+  return 'data-url'
 }
 
 export async function copyImageSourceToClipboard(src: string | Promise<string | undefined>) {
@@ -93,6 +101,17 @@ async function writeImageBlobToClipboard(blob: Blob) {
   await navigator.clipboard.write([
     new ClipboardItem(clipboardItems),
   ])
+}
+
+async function blobToDataUrl(blob: Blob) {
+  const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`
 }
 
 function isClipboardTypeSupported(type: string) {

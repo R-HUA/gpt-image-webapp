@@ -84,11 +84,37 @@ vi.mock('./lib/backend', () => ({
   cancelBackendJob: vi.fn(),
 }))
 import { clearImages, clearTasks, putImage, putTask } from './lib/db'
-import { editOutputs, getPersistedState, getTaskApiProfile, initStore, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
+import { countBatchToolCallAttempts, countResponseToolCalls, editOutputs, getPersistedState, getTaskApiProfile, initStore, markInterruptedOpenAIRunningTasks, retryTask, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
 const getBackendJobMock = vi.mocked((await import('./lib/backend')).getBackendJob)
+
+describe('agent tool budget accounting', () => {
+  it('counts image, web search, and continuation function calls but excludes batch wrapper calls', () => {
+    expect(countResponseToolCalls([
+      { type: 'image_generation_call' },
+      { type: 'web_search_call' },
+      { type: 'function_call', name: 'continue_generation' },
+      { type: 'function_call', name: 'generate_image_batch' },
+      { type: 'function_call_output' },
+      { type: 'message' },
+    ])).toBe(3)
+  })
+
+  it('counts batch tool attempts by requested item and treats invalid batches as one attempt', () => {
+    expect(countBatchToolCallAttempts({
+      arguments: JSON.stringify({
+        images: [
+          { id: 'a', prompt: 'A', reference_ids: [] },
+          { id: 'b', prompt: 'B', reference_ids: ['round-1-image-1'] },
+        ],
+      }),
+    })).toBe(2)
+    expect(countBatchToolCallAttempts({ arguments: JSON.stringify({ images: [] }) })).toBe(1)
+    expect(countBatchToolCallAttempts({ arguments: '{bad json' })).toBe(1)
+  })
+})
 
 async function flushAsyncTasks() {
   await Promise.resolve()

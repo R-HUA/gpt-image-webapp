@@ -112,6 +112,10 @@ export type PromptMentionPart =
   | { type: 'mention'; text: string; imageIndex: number; mentionText?: string }
   | { type: 'mention'; text: string; mentionText: string; imageIndex?: never }
 
+export function getPromptMentionPartSerializedText(part: Extract<PromptMentionPart, { type: 'mention' }>) {
+  return part.mentionText ?? (part.imageIndex != null ? getSelectedImageMentionLabel(part.imageIndex) : getSelectedTextMentionLabel(part.text))
+}
+
 export function getPromptMentionParts(prompt: string, inputImages: InputImage[]): PromptMentionPart[] {
   const parts: PromptMentionPart[] = []
   let lastIndex = 0

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InputImage } from '../types'
-import { getAtImageQuery, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi } from './promptImageMentions'
+import { getAtImageQuery, getPromptMentionPartSerializedText, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
@@ -67,6 +67,13 @@ describe('prompt image mentions', () => {
       { type: 'mention', text: '@第2轮图4', mentionText: getSelectedTextMentionLabel('@第2轮图4') },
       { type: 'text', text: '生成' },
     ])
+  })
+
+  it('serializes agent round mention tags without converting them to input-image mentions', () => {
+    const parts = getPromptMentionParts(`用${getSelectedTextMentionLabel('@第2轮图4')}生成`, images)
+    const mention = parts.find((part) => part.type === 'mention')
+
+    expect(mention && getPromptMentionPartSerializedText(mention)).toBe(getSelectedTextMentionLabel('@第2轮图4'))
   })
 
   it('detects cursor inside selected image mentions', () => {

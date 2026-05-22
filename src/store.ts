@@ -2817,12 +2817,17 @@ function mergeResponseOutputItems(previous: ResponsesOutputItem[], next: Respons
   return merged
 }
 
-function countResponseToolCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
+export function countResponseToolCalls(output: ResponsesOutputItem[]) {
+  return output.filter((item) => {
+    if (item.type === 'image_generation_call' || item.type === 'web_search_call') return true
+    if (item.type === 'function_call') return item.name !== 'generate_image_batch'
+    return false
+  }).length
 }
 
-function countResponseImageCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
+export function countBatchToolCallAttempts(functionCallItem: Pick<ResponsesOutputItem, 'arguments'>) {
+  const batchItems = parseBatchImageCallArguments(functionCallItem.arguments ?? '')
+  return batchItems?.length ?? 1
 }
 
 function createAgentContinuationInputItem(newImageRefs: string[], toolCallsUsed: number, maxToolCalls: number) {
@@ -3354,6 +3359,7 @@ async function executeAgentRound(
       const callId = functionCallItem.call_id ?? ''
       const args = functionCallItem.arguments ?? ''
       const batchItems = parseBatchImageCallArguments(args)
+      toolCallsUsed += countBatchToolCallAttempts(functionCallItem)
 
       if (!batchItems || batchItems.length === 0) {
         return JSON.stringify({ error: 'Invalid or empty batch arguments' })
@@ -3439,9 +3445,6 @@ async function executeAgentRound(
           })
         }
       }
-
-      const successCount = outputImages.filter((img) => img.status === 'done').length
-      toolCallsUsed += successCount
 
       return JSON.stringify({ images: outputImages })
     }
