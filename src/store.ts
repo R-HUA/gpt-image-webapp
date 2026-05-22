@@ -1355,7 +1355,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 || serverImageBatchMode })
-  const isCodexCliBatch = batchMode && !serverImageBatchMode && orderedInputImages.length === 0 && activeProfile.codexCli
+  const codexCliActive = settings.backendCodexCli === true
+  const isCodexCliBatch = batchMode && !serverImageBatchMode && orderedInputImages.length === 0 && codexCliActive
   const submittedParams = (batchMode || serverImageBatchMode)
     ? { ...normalizedParams, n: 1 }
     : normalizedParams
@@ -2569,4 +2570,3 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file)
   })
 }
-

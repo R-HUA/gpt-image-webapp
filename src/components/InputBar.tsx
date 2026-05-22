@@ -474,7 +474,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const canUseServerImageBatch = user?.role === 'admin' && Boolean(adminServerImagePath)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
-  const codexCliActive = Boolean(settings.backendCodexCli || settings.codexCli)
+  const codexCliActive = settings.backendCodexCli === true
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
@@ -1605,7 +1605,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
           text={isFalProvider ? 'fal.ai 不支持审核参数' : 'Responses API 不支持审核参数'}
         />
       </label>
-      {(!batchMode || (batchMode && codexCliActive && inputImages.length === 0)) && (
+      {(!batchMode || (batchMode && !serverImageBatchMode && codexCliActive && inputImages.length === 0)) && (
         <label className="relative flex flex-col gap-0.5">
           <span className="text-gray-400 dark:text-gray-500 ml-1">
             {batchMode && codexCliActive && inputImages.length === 0 ? '批量子任务数' : '数量'}

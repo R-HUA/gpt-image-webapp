@@ -245,6 +245,54 @@ describe('mask draft lifecycle in store actions', () => {
     })
   })
 
+  it('ignores stale local codex cli settings when backend runtime is not codex cli', async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', codexCli: true, backendCodexCli: false },
+      batchMode: true,
+      batchCount: 2,
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS, n: 4 },
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((item) => item.batchIndex)).toEqual([1, 2])
+    expect(state.tasks.every((item) => item.batchTotal === 2)).toBe(true)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      batchCount: 2,
+      params: expect.objectContaining({ n: 1 }),
+    })
+  })
+
+  it('uses n as the no-image batch count only when backend runtime is codex cli', async () => {
+    useStore.setState({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', codexCli: false, backendCodexCli: true },
+      batchMode: true,
+      batchCount: 2,
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS, n: 4 },
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(4)
+    expect(state.tasks.map((item) => item.batchIndex)).toEqual([1, 2, 3, 4])
+    expect(state.tasks.every((item) => item.batchTotal === 4)).toBe(true)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      batchCount: 4,
+      params: expect.objectContaining({ n: 1 }),
+    })
+  })
+
   it('retries a batch child as an independent task', async () => {
     const failedBatchTask = task({
       status: 'error',
