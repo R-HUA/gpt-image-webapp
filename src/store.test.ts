@@ -571,6 +571,82 @@ describe('mask draft lifecycle in store actions', () => {
     }
   })
 
+  it('marks only actively running backend batch children as running', async () => {
+    vi.useFakeTimers()
+    try {
+      const children = [1, 2, 3].map((index) => task({
+        id: `batch-child-${index}`,
+        status: 'running',
+        batch: true,
+        batchId: 'batch-progress',
+        batchIndex: index,
+        batchTotal: 3,
+        backendJobOwner: index === 1,
+        backendJobId: 'backend-job-running-batch',
+        createdAt: 1_000 + index,
+        finishedAt: null,
+        elapsed: null,
+      }))
+      getBackendJobMock
+        .mockResolvedValueOnce({
+          job: {
+            id: 'backend-job-running-batch',
+            status: 'running',
+            queuePosition: 0,
+            createdAt: 1_000,
+            startedAt: 1_100,
+            finishedAt: null,
+            error: null,
+            progress: { total: 3, completed: 0, failed: 0, current: 2, running: [2], maxStarted: 2 },
+            result: null,
+          },
+        })
+        .mockResolvedValueOnce({
+          job: {
+            id: 'backend-job-running-batch',
+            status: 'done',
+            queuePosition: 0,
+            createdAt: 1_000,
+            startedAt: 1_100,
+            finishedAt: 2_000,
+            error: null,
+            progress: { total: 3, completed: 3, failed: 0, current: null, running: [], maxStarted: 3 },
+            result: {
+              images: [
+                'data:image/png;base64,a',
+                'data:image/png;base64,b',
+                'data:image/png;base64,c',
+              ],
+              actualParams: { n: 3 },
+              actualParamsList: [{ n: 1 }, { n: 1 }, { n: 1 }],
+              revisedPrompts: [],
+              rawImageUrls: [],
+              requestIndexes: [1, 2, 3],
+            },
+          },
+        })
+      await Promise.all(children.map((child) => putTask(child)))
+      useStore.setState({ tasks: children })
+
+      await initStore()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(useStore.getState().tasks.map((item) => [item.batchIndex, item.status])).toEqual([
+        [1, 'queued'],
+        [2, 'running'],
+        [3, 'queued'],
+      ])
+
+      await vi.advanceTimersByTimeAsync(1200)
+      await Promise.resolve()
+
+      expect(useStore.getState().tasks.every((item) => item.status === 'done')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('marks completed backend jobs recoverable when local result sync fails and retries the same job', async () => {
     const originalFetch = globalThis.fetch
     const fetchMock = vi.fn()

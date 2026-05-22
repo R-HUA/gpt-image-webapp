@@ -4,6 +4,7 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
+import { getBackendProcessedCount } from '../lib/backendProgress'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -195,7 +196,7 @@ export default function DetailModal() {
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const backendProgress = task.backendProgress
-  const backendProcessed = backendProgress ? Math.min(backendProgress.total, backendProgress.completed + backendProgress.failed) : 0
+  const backendProcessed = getBackendProcessedCount(backendProgress)
   const backendProgressText = backendProgress && backendProgress.total > 1
     ? `生成中 ${backendProcessed}/${backendProgress.total}${backendProgress.failed ? `，失败 ${backendProgress.failed}` : ''}`
     : ''

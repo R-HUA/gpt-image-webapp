@@ -145,6 +145,10 @@ export interface BackendJobProgress {
   completed: number
   failed: number
   current?: number | null
+  /** Sub-request indexes currently executing. Falls back to current when absent. */
+  running?: number[]
+  /** Highest sub-request index that has started; used to reject cancellation of already-started items. */
+  maxStarted?: number | null
   /** Gallery records for sub-requests that completed during batch execution */
   completedRecords?: Array<{ id: string; outputUrl: string; thumbnailUrl: string; requestIndex: number }>
   /** Error details for sub-requests that failed during batch execution */

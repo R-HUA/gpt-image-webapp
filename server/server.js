@@ -17,6 +17,8 @@ const jobs = new Map()
 const queue = []
 const pendingUploads = new Map()
 let activeCount = 0
+let activeProviderRequestCount = 0
+const providerRequestQueue = []
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 const PAGE_SIZE_MAX = 100
@@ -104,6 +106,56 @@ function id(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString('hex')}`
 }
 
+function getConfiguredConcurrency() {
+  return Math.max(1, Math.min(20, Number(store.data.settings.concurrency || 2)))
+}
+
+function createAbortError() {
+  if (typeof DOMException !== 'undefined') return new DOMException('请求已取消', 'AbortError')
+  const err = new Error('请求已取消')
+  err.name = 'AbortError'
+  return err
+}
+
+function pumpProviderRequestQueue() {
+  const concurrency = getConfiguredConcurrency()
+  while (activeProviderRequestCount < concurrency && providerRequestQueue.length) {
+    const waiter = providerRequestQueue.shift()
+    if (waiter.signal?.aborted) {
+      waiter.reject(createAbortError())
+      continue
+    }
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener('abort', waiter.onAbort)
+    }
+    activeProviderRequestCount++
+    waiter.resolve(releaseProviderRequestSlot)
+  }
+}
+
+function releaseProviderRequestSlot() {
+  activeProviderRequestCount = Math.max(0, activeProviderRequestCount - 1)
+  pumpProviderRequestQueue()
+}
+
+function acquireProviderRequestSlot(signal) {
+  if (signal?.aborted) return Promise.reject(createAbortError())
+  if (activeProviderRequestCount < getConfiguredConcurrency()) {
+    activeProviderRequestCount++
+    return Promise.resolve(releaseProviderRequestSlot)
+  }
+  return new Promise((resolve, reject) => {
+    const waiter = { resolve, reject, signal, onAbort: null }
+    waiter.onAbort = () => {
+      const idx = providerRequestQueue.indexOf(waiter)
+      if (idx >= 0) providerRequestQueue.splice(idx, 1)
+      reject(createAbortError())
+    }
+    if (signal) signal.addEventListener('abort', waiter.onAbort, { once: true })
+    providerRequestQueue.push(waiter)
+  })
+}
+
 function safeSegment(value) {
   return String(value || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80) || 'unknown'
 }
@@ -125,12 +177,17 @@ async function ensureDirs() {
 async function cleanPendingUploadsAtStartup() {
   try {
     const baseDir = path.resolve(rootDir, serverConfig.batchUploadDir)
+    let cleanedCount = 0
     const users = await fs.readdir(baseDir).catch(() => [])
     for (const userSegment of users) {
       const pendingDir = path.join(baseDir, userSegment, 'pending')
-      await fs.rm(pendingDir, { recursive: true, force: true }).catch(() => {})
+      const stat = await fs.stat(pendingDir).catch(() => null)
+      if (stat?.isDirectory()) {
+        await fs.rm(pendingDir, { recursive: true, force: true })
+        cleanedCount++
+      }
     }
-    log('info', 'upload.cleanup.startup.done')
+    log('info', 'upload.cleanup.startup.done', { cleanedCount })
   } catch (err) {
     logError('upload.cleanup.startup.failed', err)
   }
@@ -544,7 +601,8 @@ async function persistResult(job, result) {
   const thumbDir = path.resolve(rootDir, serverConfig.thumbnailDir, usernameDir)
   const records = []
   for (let i = 0; i < result.images.length; i++) {
-    const basename = `${dateStamp()}_${job.id}_${i + 1}`
+    const requestIndex = result.requestIndexes?.[i]
+    const basename = `${dateStamp()}_${job.id}${requestIndex ? `_r${requestIndex}` : ''}_${i + 1}`
     const saved = await saveDataUrl(result.images[i], outputDir, basename)
     const thumbPath = await makeThumbnail(saved.filePath, path.join(thumbDir, `${basename}.${saved.ext}`))
     records.push({
@@ -593,7 +651,7 @@ function enqueue(job) {
 }
 
 function pumpQueue() {
-  const concurrency = Math.max(1, Number(store.data.settings.concurrency || 2))
+  const concurrency = getConfiguredConcurrency()
   while (activeCount < concurrency && queue.length) {
     const job = queue.shift()
     if (!job || job.status !== 'queued') continue
@@ -696,29 +754,68 @@ async function runJob(job) {
     } else if (job.request.batch) {
       await persistBatchUploads(job, job.request.inputImageDataUrls || [])
     }
-    job.progress = { total: requests.length, completed: 0, failed: 0, current: requests.length ? 1 : null, completedRecords: [], failedRequests: [], skipped: 0 }
+    job.progress = {
+      total: requests.length,
+      completed: 0,
+      failed: 0,
+      current: null,
+      running: [],
+      maxStarted: 0,
+      completedRecords: [],
+      failedRequests: [],
+      skipped: 0,
+    }
     log('info', 'job.request_plan.ready', { jobId: job.id, requestCount: requests.length, codexCliSplitCount })
 
     const allRecords = []
     const requestErrors = []
+    const skippedRequestIndexes = new Set()
     let successImageCount = 0
-    for (let i = 0; i < requests.length; i++) {
-      // Support skipping individual sub-requests (batch item cancellation)
-      if (job.skipIndexes?.includes(i + 1)) {
-        job.progress.skipped = (job.progress.skipped || 0) + 1
-        job.progress.current = i + 1 < requests.length ? i + 2 : null
-        log('info', 'provider.request.skipped', { jobId: job.id, requestIndex: i + 1 })
-        continue
+    let nextRequestIndex = 0
+
+    function syncRunningProgress(requestIndex, running) {
+      const runningSet = new Set(job.progress.running || [])
+      if (running) {
+        runningSet.add(requestIndex)
+        job.progress.maxStarted = Math.max(job.progress.maxStarted || 0, requestIndex)
+      } else {
+        runningSet.delete(requestIndex)
       }
+      job.progress.running = [...runningSet].sort((a, b) => a - b)
+      job.progress.current = job.progress.running[0] ?? null
+    }
+
+    function markSkipped(requestIndex) {
+      if (skippedRequestIndexes.has(requestIndex)) return
+      skippedRequestIndexes.add(requestIndex)
+      job.progress.skipped = (job.progress.skipped || 0) + 1
+      log('info', 'provider.request.skipped', { jobId: job.id, requestIndex })
+    }
+
+    async function runProviderRequest(i) {
+      const requestIndex = i + 1
+      // Support skipping individual sub-requests (batch item cancellation)
+      if (job.skipIndexes?.includes(requestIndex)) {
+        markSkipped(requestIndex)
+        return
+      }
+      const releaseProviderSlot = await acquireProviderRequestSlot(job.abortController.signal)
+      let started = false
+      try {
+        if (job.skipIndexes?.includes(requestIndex)) {
+          markSkipped(requestIndex)
+          return
+        }
+        syncRunningProgress(requestIndex, true)
+        started = true
       const request = requests[i]
       const requestStartedAt = Date.now()
-      job.progress.current = i + 1
       const providerRequest = request.inputImageFilePath
         ? { ...request, inputImageDataUrls: [await readImageFileAsDataUrl(request.inputImageFilePath)] }
         : request
       log('info', 'provider.request.started', {
         jobId: job.id,
-        requestIndex: i + 1,
+        requestIndex,
         requestCount: requests.length,
         provider: activeProfile.provider,
         model: activeProfile.model,
@@ -732,7 +829,7 @@ async function runJob(job) {
         const result = await callImageProvider(activeProfile, providerRequest, job.abortController.signal)
         log('info', 'provider.request.done', {
           jobId: job.id,
-          requestIndex: i + 1,
+          requestIndex,
           durationMs: Date.now() - requestStartedAt,
           imageCount: result.images.length,
           rawImageUrlCount: result.rawImageUrls?.length || 0,
@@ -744,7 +841,7 @@ async function runJob(job) {
           actualParamsList: result.actualParamsList || result.images.map(() => result.actualParams),
           revisedPrompts: result.revisedPrompts || result.images.map(() => undefined),
           rawImageUrls: result.rawImageUrls || [],
-          requestIndexes: result.images.map(() => i + 1),
+          requestIndexes: result.images.map(() => requestIndex),
         })
         allRecords.push(...partialRecords)
         successImageCount += result.images.length
@@ -758,12 +855,12 @@ async function runJob(job) {
         job.progress.completed += 1
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        requestErrors.push({ requestIndex: i + 1, message })
-        job.progress.failedRequests.push({ requestIndex: i + 1, message })
+        requestErrors.push({ requestIndex, message })
+        job.progress.failedRequests.push({ requestIndex, message })
         job.progress.failed += 1
         logError('provider.request.failed', err, {
           jobId: job.id,
-          requestIndex: i + 1,
+          requestIndex,
           requestCount: requests.length,
           provider: activeProfile.provider,
           model: activeProfile.model,
@@ -773,24 +870,31 @@ async function runJob(job) {
           hasMask: Boolean(request.maskDataUrl),
           sourceServerPath: request.sourceServerPath,
         })
-        // If it's the only request, or if it's the last one and we have NO successful images yet, throw.
-        // Otherwise, we swallow the error and return whatever succeeded.
-        if (requests.length === 1 || (i === requests.length - 1 && successImageCount === 0)) {
-          throw err
-        }
       }
-      job.progress.current = i + 1 < requests.length ? i + 2 : null
+      } finally {
+        if (started) syncRunningProgress(requestIndex, false)
+        releaseProviderSlot()
+      }
+    }
+
+    async function runBatchWorker() {
+      while (nextRequestIndex < requests.length) {
+        const i = nextRequestIndex
+        nextRequestIndex += 1
+        await runProviderRequest(i)
+      }
+    }
+
+    const workerCount = Math.min(requests.length, getConfiguredConcurrency())
+    await Promise.all(Array.from({ length: workerCount }, () => runBatchWorker()))
+    if (successImageCount === 0 && requestErrors.length > 0) {
+      throw new Error(requestErrors[0].message)
     }
 
     // Results already persisted per sub-request above; build final result from accumulated records
-    const skippedRequests = []
-    if (Array.isArray(job.skipIndexes)) {
-      for (let i = 0; i < requests.length; i++) {
-        if (job.skipIndexes.includes(i + 1)) {
-          skippedRequests.push({ requestIndex: i + 1, message: '已取消' })
-        }
-      }
-    }
+    const skippedRequests = [...skippedRequestIndexes]
+      .sort((a, b) => a - b)
+      .map((requestIndex) => ({ requestIndex, message: '已取消' }))
 
     const result = {
       images: [],
@@ -806,7 +910,10 @@ async function runJob(job) {
     }
     job.status = 'done'
     job.finishedAt = Date.now()
-    if (job.progress) job.progress.current = null
+    if (job.progress) {
+      job.progress.current = null
+      job.progress.running = []
+    }
     job.result = {
       ...result,
       records: allRecords.map((record) => ({
@@ -1216,7 +1323,7 @@ async function handleApi(req, res, url) {
     if (!user) return
     const jobId = decodePathParam(res, jobMatch[1], '任务 ID')
     if (jobId == null) return
-    let job = jobs.get(jobId)
+    const job = jobs.get(jobId)
 
     if (!job && req.method === 'GET') {
       const snapshots = store.data.jobSnapshots || []
@@ -1228,6 +1335,7 @@ async function handleApi(req, res, url) {
         const { username, ...jobView } = snapshot
         return sendJson(res, { job: jobView })
       }
+
       const restored = getJobViewFromPersistedResults(jobId)
       if (restored) {
         if (user.role !== 'admin' && restored.username !== user.username) {
@@ -1246,12 +1354,20 @@ async function handleApi(req, res, url) {
           return sendJson(res, { error: '只能取消未开始的子请求' }, 400)
         }
         const requestedSkips = body.skipIndexes.map(Number)
-        const currentExecuting = job.progress?.current ?? (job.status === 'running' ? 1 : 0)
+        const maxStarted = Number.isInteger(job.progress?.maxStarted)
+          ? job.progress.maxStarted
+          : job.progress?.current ?? (job.status === 'running' ? 1 : 0)
+        const runningIndexes = new Set(Array.isArray(job.progress?.running)
+          ? job.progress.running
+          : job.progress?.current
+          ? [job.progress.current]
+          : [])
         const total = Number.isInteger(job.progress?.total) && job.progress.total > 0 ? job.progress.total : null
         const invalidIndexes = requestedSkips.filter((idx) => (
           !Number.isInteger(idx) ||
           idx <= 0 ||
-          idx <= currentExecuting ||
+          runningIndexes.has(idx) ||
+          idx <= maxStarted ||
           (total != null && idx > total)
         ))
         if (invalidIndexes.length > 0) {
@@ -1273,6 +1389,7 @@ async function handleApi(req, res, url) {
       log('info', 'job.cancel', { ...requestLogDetails(req, user), jobId: job.id })
       return sendJson(res, { job: getJobView(job) })
     }
+    return sendJson(res, { error: '任务不存在' }, 404)
   }
 
   if (url.pathname === '/api/gallery' && req.method === 'GET') {

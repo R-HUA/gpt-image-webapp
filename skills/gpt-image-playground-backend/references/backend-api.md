@@ -70,3 +70,7 @@ Successful result:
   }
 }
 ```
+
+When results have already been persisted by the backend, `result.images` can be
+an empty array to avoid returning large base64 payloads. In that case clients
+should download `result.records[].outputUrl` with the same Bearer token.

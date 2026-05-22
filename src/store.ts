@@ -2268,12 +2268,24 @@ async function ensureServerBatchDisplayTasks(ownerTask: TaskRecord, backendJob: 
 function updateBackendJobStateForDisplayTasks(task: TaskRecord, backendJob: BackendJob, status: TaskRecord['status']) {
   const latestTask = useStore.getState().tasks.find((item) => item.id === task.id) || task
   const targets = latestTask.backendJobOwner && latestTask.batchId ? getBatchSiblings(latestTask) : [latestTask]
+  const runningIndexes = new Set(
+    backendJob.progress?.running?.length
+      ? backendJob.progress.running
+      : backendJob.progress?.current
+      ? [backendJob.progress.current]
+      : [],
+  )
+  const total = backendJob.progress?.total ?? 0
   for (const target of targets) {
     const canResumeRecoverable = Boolean(target.backendRecoverable && (status === 'queued' || status === 'running'))
     const preserveTerminalStatus = isTerminalTaskStatus(target.status) && !canResumeRecoverable
+    const requestIndex = target.batchIndex ?? 1
+    const targetStatus = status === 'running' && target.batchId && total > 1
+      ? runningIndexes.has(requestIndex) ? 'running' : 'queued'
+      : status
     updateTaskInStore(target.id, {
       backendJobId: backendJob.id,
-      ...(preserveTerminalStatus ? {} : { status }),
+      ...(preserveTerminalStatus ? {} : { status: targetStatus }),
       queuePosition: backendJob.queuePosition,
       backendProgress: backendJob.progress || undefined,
       ...(preserveTerminalStatus && target.backendRecoverable ? {} : { backendRecoverable: false }),
