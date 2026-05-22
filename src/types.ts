@@ -390,6 +390,7 @@ export interface ResponsesOutputItem {
   }>
   result?: string | {
     b64_json?: string
+    base64?: string
     image?: string
     data?: string
   }
