@@ -8,6 +8,7 @@ import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigration
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
+import AgentWorkspace from './components/AgentWorkspace'
 import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
@@ -20,14 +21,17 @@ import SupportPromptModal from './components/SupportPromptModal'
 import LoginScreen from './components/LoginScreen'
 import GalleryPage from './components/GalleryPage'
 import BatchDetailModal from './components/BatchDetailModal'
+import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
   const setServerImageBatchMode = useStore((s) => s.setServerImageBatchMode)
+  const appMode = useStore((s) => s.appMode)
   const [user, setUser] = useState<BackendUser | null>(null)
   const [sessionLoaded, setSessionLoaded] = useState(false)
   const [route, setRoute] = useState(window.location.pathname === '/gallery' ? 'gallery' : 'home')
   useDockerApiUrlMigrationNotice()
+  useGlobalClickSuppression()
 
   const clearBackendRuntimeState = () => {
     setServerImageBatchMode(false)
@@ -136,12 +140,16 @@ export default function App() {
         }}
         onOpenGallery={() => navigate('gallery')}
       />
-      <main data-home-main data-drag-select-surface className="pb-48">
-        <div className="safe-area-x max-w-7xl mx-auto">
-          <SearchBar />
-          <TaskGrid />
-        </div>
-      </main>
+      {appMode === 'agent' ? (
+        <AgentWorkspace />
+      ) : (
+        <main data-home-main data-drag-select-surface className="pb-48">
+          <div className="safe-area-x max-w-7xl mx-auto">
+            <SearchBar />
+            <TaskGrid />
+          </div>
+        </main>
+      )}
       <InputBar user={user} />
       <DetailModal />
       <BatchDetailModal />

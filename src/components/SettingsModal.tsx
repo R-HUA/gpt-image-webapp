@@ -17,12 +17,14 @@ import {
   importCustomProviderSettingsFromJson,
   isOpenAICompatibleProvider,
   mergeImportedSettings,
+  normalizeAgentMaxToolRounds,
   normalizeCustomProviderDefinition,
   normalizeSettings,
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import type { ApiProfile, AppSettings, CustomProviderDefinition } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, type ApiProfile, type AppSettings, type CustomProviderDefinition } from '../types'
+import type { SettingsTab } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
@@ -48,6 +50,7 @@ const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
 }
 
 type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
+type LocalSettingsTab = SettingsTab | 'admin'
 
 function readCopyImportUrlOptions(): CopyImportUrlOptions {
   if (typeof window === 'undefined') return DEFAULT_COPY_IMPORT_URL_OPTIONS
@@ -270,6 +273,7 @@ profiles 中不要包含 apiKey（用户导入后自行填写）。
 
 export default function SettingsModal({ user }: { user: BackendUser | null }) {
   const showSettings = useStore((s) => s.showSettings)
+  const settingsTabRequest = useStore((s) => s.settingsTabRequest)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
@@ -299,7 +303,8 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
   const [profileImportUrlTooltipVisible, setProfileImportUrlTooltipVisible] = useState(false)
   const [duplicateProfileTooltipVisible, setDuplicateProfileTooltipVisible] = useState(false)
   const [llmPromptTooltipVisible, setLlmPromptTooltipVisible] = useState(false)
-  const [activeTab, setActiveTab] = useState<'general' | 'data' | 'admin' | 'about'>('general')
+  const [agentMaxToolRoundsInput, setAgentMaxToolRoundsInput] = useState(String(settings.agentMaxToolRounds))
+  const [activeTab, setActiveTab] = useState<LocalSettingsTab>('general')
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
   const [importConfig, setImportConfig] = useState(true)
@@ -394,7 +399,12 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
     })
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+    setAgentMaxToolRoundsInput(String(nextDraft.agentMaxToolRounds))
   }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId])
+
+  useEffect(() => {
+    if (settingsTabRequest) setActiveTab(settingsTabRequest)
+  }, [settingsTabRequest])
 
   useEffect(() => {
     setTimeoutInput(String(activeProfile.timeout))
@@ -499,6 +509,14 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
   }
+
+  const commitAgentMaxToolRounds = useCallback(() => {
+    const value = agentMaxToolRoundsInput.trim() === ''
+      ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
+      : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
+    if (value !== draft.agentMaxToolRounds) commitSettings({ ...draft, agentMaxToolRounds: value })
+    setAgentMaxToolRoundsInput(String(value))
+  }, [agentMaxToolRoundsInput, draft])
 
   const updateCopyImportUrlOptions = (patch: Partial<CopyImportUrlOptions>) => {
     setCopyImportUrlOptions((previous) => {
@@ -1051,6 +1069,16 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
           <div className="w-full sm:w-48 shrink-0 flex flex-col border-b sm:border-b-0 sm:border-r border-gray-100 dark:border-white/[0.08] bg-gray-50/50 dark:bg-white/[0.02]">
             <nav className="flex-1 overflow-x-auto sm:overflow-y-auto custom-scrollbar p-3 space-x-1 sm:space-x-0 sm:space-y-1 flex sm:flex-col">
               <button
+                onClick={() => setActiveTab('api')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'api' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+                API 配置
+              </button>
+
+              <button
                 onClick={() => setActiveTab('general')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'general' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1058,6 +1086,18 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
                 </svg>
                 习惯配置
+              </button>
+
+              <button
+                onClick={() => setActiveTab('agent')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'agent' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8V4H8" />
+                  <rect width="16" height="12" x="4" y="8" rx="2" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2 14h2M20 14h2M15 13v2M9 13v2" />
+                </svg>
+                Agent 配置
               </button>
 
               <button
@@ -1095,6 +1135,98 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
           {/* Content */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative overflow-hidden">
             <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 sm:p-6">
+            {activeTab === 'api' && (
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-blue-100/70 bg-blue-50/40 p-4 text-xs leading-relaxed text-blue-700 dark:border-blue-500/15 dark:bg-blue-500/10 dark:text-blue-200">
+                  普通生图仍由私有后端统一执行。这里保留前端直连配置，主要供上游 Agent 模式使用；Agent 需要 OpenAI 兼容配置并切换为 Responses API。
+                </div>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">配置名称</span>
+                  <input
+                    value={activeProfile.name}
+                    onChange={(e) => updateActiveProfile({ name: e.target.value })}
+                    onBlur={() => commitActiveProfilePatch({ name: activeProfile.name })}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 模式</span>
+                  <Select
+                    value={activeProfile.apiMode}
+                    onChange={(val) => {
+                      const apiMode = val as ApiProfile['apiMode']
+                      commitActiveProfilePatch({
+                        apiMode,
+                        model: activeProfile.model.trim() || getDefaultModelForMode(apiMode),
+                      })
+                    }}
+                    options={[
+                      { label: 'Images API', value: 'images' },
+                      { label: 'Responses API', value: 'responses' },
+                    ]}
+                    className="w-full px-3 py-2.5 rounded-xl border border-gray-200/70 dark:border-white/[0.08] bg-white/60 dark:bg-white/[0.03] text-sm text-gray-700 dark:text-gray-200 outline-none"
+                  />
+                </label>
+                {activeProviderUsesApiUrl && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 地址</span>
+                    <input
+                      value={activeProfile.baseUrl}
+                      onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
+                      onBlur={() => commitActiveProfilePatch({ baseUrl: activeProfile.baseUrl })}
+                      placeholder={DEFAULT_SETTINGS.baseUrl}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </label>
+                )}
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型</span>
+                  <input
+                    value={activeProfile.model}
+                    onChange={(e) => updateActiveProfile({ model: e.target.value })}
+                    onBlur={() => commitActiveProfilePatch({ model: activeProfile.model })}
+                    placeholder={getDefaultModelForMode(activeProfile.apiMode)}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                  <div className="flex gap-2">
+                    <input
+                      value={activeProfile.apiKey}
+                      onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
+                      onBlur={() => commitActiveProfilePatch({ apiKey: activeProfile.apiKey })}
+                      type={showApiKey ? 'text' : 'password'}
+                      className="min-w-0 flex-1 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((visible) => !visible)}
+                      className="rounded-xl border border-gray-200/70 px-3 text-xs text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]"
+                    >
+                      {showApiKey ? '隐藏' : '显示'}
+                    </button>
+                  </div>
+                </label>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => updateActiveProfile({ streamImages: !activeProfile.streamImages }, true)}
+                    className={`rounded-xl border px-3 py-2.5 text-left text-sm transition ${activeProfile.streamImages ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200/70 bg-white/50 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'}`}
+                  >
+                    流式生成预览
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateActiveProfile({ codexCli: !activeProfile.codexCli }, true)}
+                    className={`rounded-xl border px-3 py-2.5 text-left text-sm transition ${activeProfile.codexCli ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200' : 'border-gray-200/70 bg-white/50 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300'}`}
+                  >
+                    Codex CLI 兼容
+                  </button>
+                </div>
+              </div>
+            )}
+
             {activeTab === 'general' && (
               <div className="space-y-4">
                 <div className="hidden sm:block">
@@ -1132,6 +1264,26 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     开启后，提交成功创建任务时会清空提示词和参考图。
+                  </div>
+                </div>
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">参考图编辑按钮</span>
+                    <div className="w-32">
+                      <Select
+                        value={draft.referenceImageEditAction}
+                        onChange={(val) => commitSettings({ ...draft, referenceImageEditAction: val as AppSettings['referenceImageEditAction'] })}
+                        options={[
+                          { label: '询问', value: 'ask' },
+                          { label: '替换参考图', value: 'replace-reference' },
+                          { label: '添加遮罩', value: 'add-mask' },
+                        ]}
+                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    控制未添加遮罩的参考图点击编辑按钮时，是每次询问、直接替换参考图，还是直接添加遮罩。
                   </div>
                 </div>
                 <div className="block">
@@ -1191,6 +1343,68 @@ export default function SettingsModal({ user }: { user: BackendUser | null }) {
               </div>
             )}
             
+
+            {activeTab === 'agent' && (
+              <div className="space-y-4">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
+                  <input
+                    value={agentMaxToolRoundsInput}
+                    onChange={(e) => setAgentMaxToolRoundsInput(e.target.value)}
+                    onBlur={commitAgentMaxToolRounds}
+                    type="number"
+                    min={1}
+                    max={50}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    默认 15。用于限制 Agent 连续调用工具时的最大轮数，防止无限循环。
+                  </div>
+                </label>
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">发送消息后自动滚动到底部</span>
+                    <button
+                      type="button"
+                      onClick={() => commitSettings({ ...draft, agentScrollToBottomAfterSubmit: !draft.agentScrollToBottomAfterSubmit })}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.agentScrollToBottomAfterSubmit ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={draft.agentScrollToBottomAfterSubmit}
+                      aria-label="发送消息后自动滚动到底部"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentScrollToBottomAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    开启后，在 Agent 模式发送消息成功后会自动滚动到对话底部。
+                  </div>
+                </div>
+                <div className="block">
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">网络搜索</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const agentMaxToolRounds = agentMaxToolRoundsInput.trim() === ''
+                          ? DEFAULT_AGENT_MAX_TOOL_ROUNDS
+                          : normalizeAgentMaxToolRounds(agentMaxToolRoundsInput, draft.agentMaxToolRounds)
+                        setAgentMaxToolRoundsInput(String(agentMaxToolRounds))
+                        commitSettings({ ...draft, agentMaxToolRounds, agentWebSearch: !draft.agentWebSearch })
+                      }}
+                      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${draft.agentWebSearch ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={draft.agentWebSearch}
+                      aria-label="网络搜索"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentWebSearch ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    启用 Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/[0.06]">web_search</code> 工具。模型每次调用此工具会产生少量固定价格的额外计费。
+                  </div>
+                </div>
+              </div>
+            )}
 
             
             {activeTab === 'data' && (

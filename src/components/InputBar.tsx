@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached } from '../store'
+import { useStore, submitTask, addImageFromFile, createInputImageFromFile, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, deleteImageIfUnreferenced } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -295,10 +295,12 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const setServerImageBatchMode = useStore((s) => s.setServerImageBatchMode)
   const adminServerImagePath = useStore((s) => s.settings.adminServerImagePath)
   const removeInputImage = useStore((s) => s.removeInputImage)
+  const replaceInputImage = useStore((s) => s.replaceInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
   const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
@@ -422,6 +424,8 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const moveInputImage = useStore((s) => s.moveInputImage)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const replaceFileInputRef = useRef<HTMLInputElement>(null)
+  const replaceImageTargetRef = useRef<{ index: number; id: string } | null>(null)
   const textareaRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const imagesRef = useRef<HTMLDivElement>(null)
@@ -887,6 +891,77 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await handleFilesRef.current(e.target.files || [])
     e.target.value = ''
+  }
+
+  const openReplaceReferenceFilePicker = useCallback((idx: number, imageId: string) => {
+    replaceImageTargetRef.current = { index: idx, id: imageId }
+    replaceFileInputRef.current?.click()
+  }, [])
+
+  const commitReferenceEditChoice = useCallback((choice: 'replace-reference' | 'add-mask', idx: number, imageId: string, remember?: boolean) => {
+    if (remember) setSettings({ referenceImageEditAction: choice })
+    if (choice === 'replace-reference') {
+      openReplaceReferenceFilePicker(idx, imageId)
+    } else {
+      setMaskEditorImageId(imageId)
+    }
+  }, [openReplaceReferenceFilePicker, setMaskEditorImageId, setSettings])
+
+  const handleReferenceEditClick = useCallback((idx: number, imageId: string) => {
+    if (settings.referenceImageEditAction === 'replace-reference') {
+      openReplaceReferenceFilePicker(idx, imageId)
+      return
+    }
+    if (settings.referenceImageEditAction === 'add-mask') {
+      setMaskEditorImageId(imageId)
+      return
+    }
+    setConfirmDialog({
+      title: '编辑参考图',
+      message: '请选择要对这张参考图执行的操作。',
+      checkbox: {
+        label: '记住这个选择',
+        defaultChecked: false,
+      },
+      buttons: [
+        {
+          label: '替换参考图',
+          tone: 'primary',
+          action: (remember) => commitReferenceEditChoice('replace-reference', idx, imageId, remember),
+        },
+        {
+          label: '添加遮罩',
+          tone: 'secondary',
+          action: (remember) => commitReferenceEditChoice('add-mask', idx, imageId, remember),
+        },
+      ],
+    })
+  }, [commitReferenceEditChoice, openReplaceReferenceFilePicker, setConfirmDialog, setMaskEditorImageId, settings.referenceImageEditAction])
+
+  const handleReplaceReferenceFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    const target = replaceImageTargetRef.current
+    replaceImageTargetRef.current = null
+    if (!file || !target) return
+    try {
+      const image = await createInputImageFromFile(file)
+      if (!image) {
+        showToast('请选择有效的图片文件', 'error')
+        return
+      }
+      const latestImages = useStore.getState().inputImages
+      const targetIdx = latestImages.findIndex((img) => img.id === target.id)
+      if (targetIdx < 0) {
+        void deleteImageIfUnreferenced(image.id)
+        showToast('原参考图已不存在', 'error')
+        return
+      }
+      replaceInputImage(targetIdx, image)
+      showToast('参考图已替换', 'success')
+    } catch (err) {
+      showToast(`替换参考图失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1422,9 +1497,13 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
               className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer z-20 focus:outline-none border-none"
               onClick={(e) => {
                 e.stopPropagation()
-                setMaskEditorImageId(img.id)
+                if (isMaskTarget) {
+                  setMaskEditorImageId(img.id)
+                } else {
+                  handleReferenceEditClick(idx, img.id)
+                }
               }}
-              title={isMaskTarget ? "编辑遮罩" : "添加遮罩"}
+              title={isMaskTarget ? "编辑遮罩" : "编辑参考图"}
             >
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -2092,6 +2171,13 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
             multiple
             className="hidden"
             onChange={handleFileUpload}
+          />
+          <input
+            ref={replaceFileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleReplaceReferenceFile}
           />
         </div>
       </div>
