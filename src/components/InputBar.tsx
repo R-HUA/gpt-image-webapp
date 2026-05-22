@@ -1064,7 +1064,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
     const html = prompt
       ? parts.map((part) =>
           part.type === 'mention'
-            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${getSelectedImageMentionLabel(part.imageIndex)}">${part.text}</span>`
+            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${getSelectedImageMentionLabel(part.imageIndex ?? 0)}">${part.text}</span>`
             : part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         ).join('')
       : ''
