@@ -15,27 +15,43 @@ export async function copyTextToClipboard(text: string) {
   throw asyncClipboardError ?? new Error('Clipboard API is not available')
 }
 
-export async function copyBlobToClipboard(blob: Blob): Promise<'image' | 'data-url'> {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-    await copyTextToClipboard(await blobToDataUrl(blob))
-    return 'data-url'
+export async function copyBlobToClipboard(blob: Blob | Promise<Blob>): Promise<'image' | 'data-url'> {
+  const resolvedBlob = await Promise.resolve(blob)
+  const clipboard = navigator.clipboard as (Clipboard & { write?: unknown }) | undefined
+
+  if (clipboard && typeof clipboard.write === 'function' && typeof ClipboardItem !== 'undefined') {
+    try {
+      await writeImageBlobToClipboard(resolvedBlob)
+      return 'image'
+    } catch {
+      // Fall back to a text Data URL for browsers that expose the image
+      // clipboard surface but reject the concrete image type.
+    }
   }
 
-  try {
-    await navigator.clipboard.write([
-      new ClipboardItem({ [blob.type]: blob }),
-    ])
-    return 'image'
-  } catch (err) {
-    if (isClipboardPermissionError(err)) throw err
-    await copyTextToClipboard(await blobToDataUrl(blob))
-    return 'data-url'
+  await copyTextToClipboard(await blobToDataUrl(resolvedBlob))
+  return 'data-url'
+}
+
+export async function copyImageSourceToClipboard(src: string | Promise<string | undefined>) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    throw new Error('Clipboard image API is not available')
   }
+
+  const resolvedSrc = await Promise.resolve(src)
+  if (!resolvedSrc) throw new Error('Image source is not available')
+  const res = await fetch(resolvedSrc)
+  const blob = await res.blob()
+  await writeImageBlobToClipboard(blob)
 }
 
 export function getClipboardFailureMessage(fallback: string, err: unknown) {
   if (isEmbeddedPage() && isClipboardPermissionError(err)) {
     return '复制失败：内嵌页面未授予剪贴板权限'
+  }
+
+  if (err instanceof Error && err.message.startsWith('当前浏览器不支持')) {
+    return `复制失败：${err.message}`
   }
 
   return fallback
@@ -62,13 +78,66 @@ function copyTextWithExecCommand(text: string) {
   }
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
-    reader.readAsDataURL(blob)
-  })
+async function writeImageBlobToClipboard(blob: Blob) {
+  if (!blob.type.startsWith('image/')) throw new Error('Clipboard item is not an image')
+
+  const clipboardItems: Record<string, Blob | Promise<Blob>> = {}
+  const customType = `web ${blob.type}`
+
+  if (isClipboardTypeSupported(customType)) {
+    clipboardItems[customType] = blob
+  }
+
+  if (blob.type === 'image/png') {
+    clipboardItems['image/png'] = blob
+  } else if (isClipboardTypeSupported('image/png')) {
+    clipboardItems['image/png'] = imageBlobToPngBlob(blob)
+  }
+
+  if (Object.keys(clipboardItems).length === 0) {
+    throw new Error('当前浏览器不支持图像剪贴板写入')
+  }
+
+  await navigator.clipboard.write([
+    new ClipboardItem(clipboardItems),
+  ])
+}
+
+async function blobToDataUrl(blob: Blob) {
+  const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`
+}
+
+function isClipboardTypeSupported(type: string) {
+  const supports = (ClipboardItem as typeof ClipboardItem & { supports?: (type: string) => boolean }).supports
+  return supports ? supports(type) : type === 'image/png'
+}
+
+async function imageBlobToPngBlob(blob: Blob): Promise<Blob> {
+  const image = await createImageBitmap(blob)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas is not available')
+    ctx.drawImage(image, 0, 0)
+
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) resolve(pngBlob)
+        else reject(new Error('Image conversion failed'))
+      }, 'image/png')
+    })
+  } finally {
+    image.close()
+  }
 }
 
 function isEmbeddedPage() {

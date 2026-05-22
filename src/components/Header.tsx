@@ -235,7 +235,7 @@ export default function Header({ user, onLogout, onOpenGallery }: { user: Backen
       <div className="safe-area-top invisible pointer-events-none" aria-hidden="true">
         <div className="safe-header-inner" />
       </div>
-      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {showHelp && <HelpModal appMode="gallery" onClose={() => setShowHelp(false)} />}
     </>
   )
 }

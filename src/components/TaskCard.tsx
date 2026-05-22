@@ -13,6 +13,7 @@ interface Props {
   onDelete: () => void
   onClick: (e: React.MouseEvent | React.TouchEvent) => void
   isSelected?: boolean
+  disableSwipe?: boolean
 }
 
 export default function TaskCard({
@@ -22,6 +23,7 @@ export default function TaskCard({
   onDelete,
   onClick,
   isSelected,
+  disableSwipe = false,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')

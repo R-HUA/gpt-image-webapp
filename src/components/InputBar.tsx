@@ -4,7 +4,7 @@ import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultip
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
+import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionPartSerializedText, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
@@ -173,6 +173,19 @@ function getContentEditablePlainText(el: HTMLElement): string {
   }
   el.childNodes.forEach(appendNodeText)
   return text.replace(/\r\n?/g, '\n')
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function escapeHtmlAttribute(text: string): string {
+  return escapeHtmlText(text)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function syncMentionTagSelection(el: HTMLElement) {
@@ -474,7 +487,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const canUseServerImageBatch = user?.role === 'admin' && Boolean(adminServerImagePath)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
-  const codexCliActive = Boolean(settings.backendCodexCli || settings.codexCli)
+  const codexCliActive = settings.backendCodexCli === true
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
@@ -1064,8 +1077,8 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
     const html = prompt
       ? parts.map((part) =>
           part.type === 'mention'
-            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${getSelectedImageMentionLabel(part.imageIndex)}">${part.text}</span>`
-            : part.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            ? `<span contenteditable="false" class="mention-tag" data-mention-text="${escapeHtmlAttribute(getPromptMentionPartSerializedText(part))}">${escapeHtmlText(part.text)}</span>`
+            : escapeHtmlText(part.text)
         ).join('')
       : ''
     if (el.innerHTML !== html) {
@@ -1605,9 +1618,11 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
           text={isFalProvider ? 'fal.ai 不支持审核参数' : 'Responses API 不支持审核参数'}
         />
       </label>
-      {!batchMode && (
+      {(!batchMode || (batchMode && !serverImageBatchMode && codexCliActive && inputImages.length === 0)) && (
         <label className="relative flex flex-col gap-0.5">
-          <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
+          <span className="text-gray-400 dark:text-gray-500 ml-1">
+            {batchMode && codexCliActive && inputImages.length === 0 ? '批量子任务数' : '数量'}
+          </span>
           <input
             value={nInput}
             onChange={(e) => handleNInputChange(e.target.value)}
@@ -1873,9 +1888,9 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                       >
                         批量模式
                       </button>
-                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && (
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && !codexCliActive && (
                         <label className="flex items-center gap-1">
-                          <span>批量数</span>
+                          <span>批量子任务数</span>
                           <input
                             value={batchCount}
                             onChange={(e) => setBatchCount(Number(e.target.value))}
@@ -1887,8 +1902,9 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                         </label>
                       )}
                       {batchMode && serverImageBatchMode && <span>作为 1 个后端批量任务提交，运行后按目录图片显示子卡片</span>}
-                      {batchMode && !serverImageBatchMode && inputImages.length > 0 && <span>作为 1 个后端批量任务提交，显示 {inputImages.length} 张子卡片</span>}
-                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && <span>作为 1 个后端批量任务提交，显示 {batchCount} 张子卡片</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length > 0 && <span>作为 1 个后端批量任务提交，显示 {inputImages.length} 张子卡片（每个子任务生成 1 张图）</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && codexCliActive && <span>Codex CLI 批量模式：使用「数量」作为子任务数，每个子任务生成 1 张图</span>}
+                      {batchMode && !serverImageBatchMode && inputImages.length === 0 && !codexCliActive && <span>作为 1 个后端批量任务提交，每个子任务生成 1 张图</span>}
                       {user?.role === 'admin' && (
                         <button
                           type="button"
@@ -1968,15 +1984,18 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                     >
                       批量模式
                     </button>
-                    {batchMode && !serverImageBatchMode && inputImages.length === 0 && (
-                      <input
-                        value={batchCount}
-                        onChange={(e) => setBatchCount(Number(e.target.value))}
-                        type="number"
-                        min={1}
-                        max={200}
-                        className="w-20 rounded-lg border border-gray-200/60 bg-white/50 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
-                      />
+                    {batchMode && !serverImageBatchMode && inputImages.length === 0 && !codexCliActive && (
+                      <label className="flex items-center gap-1">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">子任务数</span>
+                        <input
+                          value={batchCount}
+                          onChange={(e) => setBatchCount(Number(e.target.value))}
+                          type="number"
+                          min={1}
+                          max={200}
+                          className="w-20 rounded-lg border border-gray-200/60 bg-white/50 px-2 py-1 text-xs dark:border-white/[0.08] dark:bg-white/[0.03]"
+                        />
+                      </label>
                     )}
                     {user?.role === 'admin' && (
                       <button
@@ -2002,6 +2021,8 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
                         ? `作为 1 个后端批量任务提交，运行后按目录图片显示子卡片${adminServerImagePath ? ` · ${adminServerImagePath}` : ''}`
                         : inputImages.length > 0
                         ? `作为 1 个后端批量任务提交，显示 ${inputImages.length} 张子卡片`
+                        : codexCliActive
+                        ? `作为 1 个后端批量任务提交，显示 ${params.n} 张子卡片`
                         : `作为 1 个后端批量任务提交，显示 ${batchCount} 张子卡片`}
                     </div>
                   )}
