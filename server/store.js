@@ -32,7 +32,7 @@ function normalizeBackendActiveProfile(input) {
     provider: 'openai',
     apiMode: profile.apiMode === 'responses' ? 'responses' : 'images',
     timeout: Number.isFinite(Number(profile.timeout)) ? Math.max(1, Number(profile.timeout)) : EMPTY_DB.settings.activeProfile.timeout,
-    responseFormatB64Json: profile.responseFormatB64Json === true,
+    responseFormatB64Json: profile.responseFormatB64Json ?? EMPTY_DB.settings.activeProfile.responseFormatB64Json,
     codexCli: profile.codexCli === true,
   }
 }
