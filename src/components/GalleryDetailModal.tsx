@@ -74,18 +74,18 @@ export default function GalleryDetailModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md" />
 
       {/* Modal */}
       <div
-        className="relative max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-2xl md:rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10"
+        className="relative flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/50 bg-white/90 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/90 dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 md:h-auto md:max-h-[90vh] md:flex-row md:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Image area */}
         <div
-          className="relative flex-1 flex items-center justify-center bg-black/5 dark:bg-black/20 min-h-[40vh] md:min-h-0 overflow-hidden"
+          className="relative flex h-[42dvh] min-h-0 flex-shrink-0 items-center justify-center overflow-hidden bg-black/5 dark:bg-black/20 md:h-auto md:min-h-[70vh] md:flex-1"
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
@@ -114,7 +114,7 @@ export default function GalleryDetailModal({
 
           <img
             src={record.outputUrl}
-            className={`max-h-[60vh] md:max-h-[80vh] max-w-full object-contain select-none ${record.deleted ? 'opacity-45 grayscale' : ''}`}
+            className={`max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] select-none object-contain md:max-h-[80vh] ${record.deleted ? 'opacity-45 grayscale' : ''}`}
             alt=""
             style={{
               transform: isSwiping ? `translateX(${swipeOffset}px)` : undefined,
@@ -125,9 +125,9 @@ export default function GalleryDetailModal({
         </div>
 
         {/* Info panel */}
-        <div className="w-full md:w-80 lg:w-96 flex flex-col border-t md:border-t-0 md:border-l border-gray-200 dark:border-white/[0.08] bg-white/50 dark:bg-gray-900/50">
+        <div className="flex min-h-0 w-full flex-1 flex-col border-t border-gray-200 bg-white/50 dark:border-white/[0.08] dark:bg-gray-900/50 md:w-80 md:flex-none md:border-l md:border-t-0 lg:w-96">
           {/* Top bar */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-white/[0.08]">
+          <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-white/[0.08]">
             <span className="text-xs text-gray-400 dark:text-gray-500">{currentIndex + 1} / {records.length}</span>
             <div className="flex items-center gap-1">
               <button
@@ -162,33 +162,33 @@ export default function GalleryDetailModal({
           </div>
 
           {/* Info content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             <div>
-              <p className="text-sm text-gray-900 dark:text-white leading-relaxed">{record.prompt || '(无提示词)'}</p>
+              <p className="break-words text-sm leading-relaxed text-gray-900 dark:text-white">{record.prompt || '(无提示词)'}</p>
             </div>
             {record.revisedPrompt && (
               <div>
                 <p className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">改写提示词</p>
-                <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">{record.revisedPrompt}</p>
+                <p className="break-words text-xs leading-relaxed text-gray-600 dark:text-gray-300">{record.revisedPrompt}</p>
               </div>
             )}
             <div className="pt-2 border-t border-gray-100 dark:border-white/[0.06] space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-400 dark:text-gray-500">用户</span>
-                <span className="text-gray-700 dark:text-gray-300">{record.username}</span>
+              <div className="flex items-start justify-between gap-3 text-xs">
+                <span className="shrink-0 text-gray-400 dark:text-gray-500">用户</span>
+                <span className="min-w-0 max-w-[70%] break-words text-right text-gray-700 dark:text-gray-300">{record.username}</span>
               </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-400 dark:text-gray-500">模型</span>
-                <span className="text-gray-700 dark:text-gray-300">{record.apiModel || '-'}</span>
+              <div className="flex items-start justify-between gap-3 text-xs">
+                <span className="shrink-0 text-gray-400 dark:text-gray-500">模型</span>
+                <span className="min-w-0 max-w-[70%] break-words text-right text-gray-700 dark:text-gray-300">{record.apiModel || '-'}</span>
               </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-400 dark:text-gray-500">时间</span>
-                <span className="text-gray-700 dark:text-gray-300">{new Date(record.createdAt).toLocaleString()}</span>
+              <div className="flex items-start justify-between gap-3 text-xs">
+                <span className="shrink-0 text-gray-400 dark:text-gray-500">时间</span>
+                <span className="min-w-0 max-w-[70%] break-words text-right text-gray-700 dark:text-gray-300">{new Date(record.createdAt).toLocaleString()}</span>
               </div>
               {record.deleted && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-400 dark:text-gray-500">状态</span>
-                  <span className="text-red-500">已删除</span>
+                <div className="flex items-start justify-between gap-3 text-xs">
+                  <span className="shrink-0 text-gray-400 dark:text-gray-500">状态</span>
+                  <span className="min-w-0 max-w-[70%] break-words text-right text-red-500">已删除</span>
                 </div>
               )}
             </div>

@@ -72,6 +72,23 @@ function dataUrlToBytes(dataUrl) {
   return { bytes, ext }
 }
 
+async function downloadBackendFile(outputUrl) {
+  const { baseUrl, apiKey } = getEnv()
+  const url = outputUrl.startsWith('http://') || outputUrl.startsWith('https://')
+    ? outputUrl
+    : `${baseUrl}${outputUrl.startsWith('/') ? outputUrl : `/${outputUrl}`}`
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  })
+  if (!response.ok) throw new Error(`Failed to download backend result: HTTP ${response.status}`)
+  const mime = response.headers.get('content-type') || 'image/png'
+  const bytes = Buffer.from(await response.arrayBuffer())
+  const ext = mime.includes('jpeg') ? 'jpg' : mime.split(';')[0].split('/')[1] || 'png'
+  return { bytes, ext }
+}
+
 async function api(pathname, init = {}) {
   const { baseUrl, apiKey } = getEnv()
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -134,16 +151,32 @@ async function generate(args) {
   const outDir = args.outDir || 'output/gip-backend'
   await fs.mkdir(outDir, { recursive: true })
   const saved = []
-  for (let i = 0; i < job.result.images.length; i++) {
-    const { bytes, ext } = dataUrlToBytes(job.result.images[i])
+  const images = job.result?.images || []
+  const records = job.result?.records || []
+  for (let i = 0; i < images.length; i++) {
+    const { bytes, ext } = dataUrlToBytes(images[i])
     const filePath = path.join(outDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${job.id}-${i + 1}.${ext}`)
     await fs.writeFile(filePath, bytes)
     saved.push({
       path: filePath,
-      resultId: job.result.records?.[i]?.id,
-      outputUrl: job.result.records?.[i]?.outputUrl,
-      thumbnailUrl: job.result.records?.[i]?.thumbnailUrl,
+      resultId: records[i]?.id,
+      outputUrl: records[i]?.outputUrl,
+      thumbnailUrl: records[i]?.thumbnailUrl,
     })
+  }
+  if (!saved.length && records.length) {
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i]
+      const { bytes, ext } = await downloadBackendFile(record.outputUrl)
+      const filePath = path.join(outDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${job.id}-${record.id || i + 1}.${ext}`)
+      await fs.writeFile(filePath, bytes)
+      saved.push({
+        path: filePath,
+        resultId: record.id,
+        outputUrl: record.outputUrl,
+        thumbnailUrl: record.thumbnailUrl,
+      })
+    }
   }
 
   console.log(JSON.stringify({ jobId, saved }, null, 2))

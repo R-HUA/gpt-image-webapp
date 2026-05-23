@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, cancelQueuedTask } from '../store'
 import { formatImageRatio } from '../lib/size'
+import { getBackendProcessedCount } from '../lib/backendProgress'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
 import { CodeIcon } from './icons'
@@ -191,7 +192,7 @@ export default function TaskCard({
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const backendProgress = task.backendProgress
-  const backendProcessed = backendProgress ? Math.min(backendProgress.total, backendProgress.completed + backendProgress.failed) : 0
+  const backendProcessed = getBackendProcessedCount(backendProgress)
   const backendProgressLabel = backendProgress && backendProgress.total > 1 ? `${backendProcessed}/${backendProgress.total}` : ''
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected

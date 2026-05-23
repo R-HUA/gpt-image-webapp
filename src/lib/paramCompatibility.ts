@@ -1,5 +1,5 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
-import { getActiveApiProfile } from './apiProfiles'
+import { getActiveApiProfile, isBackendRuntimeCodexCli } from './apiProfiles'
 import { normalizeImageSize } from './size'
 
 export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
@@ -23,7 +23,7 @@ export function normalizeParamsForSettings(
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 
-  if (settings.backendCodexCli || (activeProfile.provider === 'openai' && activeProfile.codexCli)) {
+  if (isBackendRuntimeCodexCli(settings) || (activeProfile.provider === 'openai' && activeProfile.codexCli)) {
     nextParams.quality = DEFAULT_PARAMS.quality
   }
 
