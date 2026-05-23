@@ -24,6 +24,19 @@ const EMPTY_DB = {
   jobSnapshots: [],
 }
 
+function normalizeBackendActiveProfile(input) {
+  const profile = input && typeof input === 'object' ? input : {}
+  return {
+    ...EMPTY_DB.settings.activeProfile,
+    ...profile,
+    provider: 'openai',
+    apiMode: profile.apiMode === 'responses' ? 'responses' : 'images',
+    timeout: Number.isFinite(Number(profile.timeout)) ? Math.max(1, Number(profile.timeout)) : EMPTY_DB.settings.activeProfile.timeout,
+    responseFormatB64Json: profile.responseFormatB64Json === true,
+    codexCli: profile.codexCli === true,
+  }
+}
+
 export class JsonStore {
   constructor(filePath) {
     this.filePath = filePath
@@ -49,10 +62,7 @@ export class JsonStore {
       settings: {
         ...EMPTY_DB.settings,
         ...(data?.settings && typeof data.settings === 'object' ? data.settings : {}),
-        activeProfile: {
-          ...EMPTY_DB.settings.activeProfile,
-          ...(data?.settings?.activeProfile && typeof data.settings.activeProfile === 'object' ? data.settings.activeProfile : {}),
-        },
+        activeProfile: normalizeBackendActiveProfile(data?.settings?.activeProfile),
       },
       users: Array.isArray(data?.users) ? data.users : [],
       apiKeys: Array.isArray(data?.apiKeys) ? data.apiKeys : [],

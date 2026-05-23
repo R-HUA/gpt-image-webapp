@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } fro
 import { createPortal } from 'react-dom'
 import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, deleteImageIfUnreferenced, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS } from '../types'
-import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { createSettingsForApiProfile, getActiveApiProfile, getBackendRuntimeApiProfile, isBackendRuntimeCodexCli, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionPartSerializedText, getPromptMentionParts, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
@@ -517,16 +517,20 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const isMobile = useIsMobile()
 
   const currentActiveProfile = useMemo(() => getActiveApiProfile(settings), [settings])
-  const activeProfile = useMemo(() => (
+  const localActiveProfile = useMemo(() => (
     settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
       ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
       : currentActiveProfile
   ), [currentActiveProfile, reusedTaskApiProfileId, settings])
+  const galleryActiveProfile = useMemo(() => (
+    getBackendRuntimeApiProfile(settings) ?? localActiveProfile
+  ), [localActiveProfile, settings])
+  const activeProfile = appMode === 'agent' ? localActiveProfile : galleryActiveProfile
   const effectiveSettings = useMemo(() => (
     activeProfile.id === currentActiveProfile.id
       ? settings
-      : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
-  ), [activeProfile.id, currentActiveProfile.id, settings])
+      : createSettingsForApiProfile(normalizeSettings(settings), activeProfile)
+  ), [activeProfile, currentActiveProfile.id, settings])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null
@@ -558,7 +562,7 @@ export default function InputBar({ user }: { user: BackendUser | null }) {
   const canUseServerImageBatch = user?.role === 'admin' && Boolean(adminServerImagePath)
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
-  const codexCliActive = settings.backendCodexCli === true
+  const codexCliActive = isBackendRuntimeCodexCli(effectiveSettings)
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)

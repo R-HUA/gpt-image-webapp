@@ -361,11 +361,24 @@ function getActiveProfileSnapshot() {
   return structuredClone(store.data.settings.activeProfile || {})
 }
 
-function getRuntimeSettingsForUser(user) {
+function getPublicActiveProfileSnapshot() {
   const activeProfile = getActiveProfileSnapshot()
+  return {
+    provider: activeProfile.provider,
+    model: activeProfile.model,
+    apiMode: activeProfile.apiMode,
+    codexCli: Boolean(activeProfile.codexCli),
+    responseFormatB64Json: Boolean(activeProfile.responseFormatB64Json),
+    timeout: Number(activeProfile.timeout || 300),
+  }
+}
+
+function getRuntimeSettingsForUser(user) {
+  const activeProfile = getPublicActiveProfileSnapshot()
   return {
     codexCli: Boolean(activeProfile.codexCli),
     serverImagePath: user?.role === 'admin' ? store.data.settings.serverImagePath || '' : '',
+    activeProfile,
   }
 }
 
@@ -377,6 +390,23 @@ function getAdminSettingsView() {
     settings.activeProfile.apiKeySet = hasApiKey
   }
   return settings
+}
+
+function normalizeAdminActiveProfilePatch(input) {
+  if (!input || typeof input !== 'object') return null
+  const patch = { ...input, provider: 'openai' }
+  if (patch.apiMode !== undefined && patch.apiMode !== 'images' && patch.apiMode !== 'responses') {
+    throw new HttpError(400, '后端服务商请求模式必须是 images 或 responses')
+  }
+  if (patch.timeout !== undefined) {
+    const timeout = Number(patch.timeout)
+    patch.timeout = Number.isFinite(timeout) ? Math.max(1, Math.min(3600, timeout)) : 300
+  }
+  if ('apiKey' in patch && !String(patch.apiKey || '').trim()) {
+    delete patch.apiKey
+  }
+  delete patch.apiKeySet
+  return patch
 }
 
 function getJobView(job) {
@@ -1103,11 +1133,7 @@ async function handleApi(req, res, url) {
       if (body.concurrency != null) store.data.settings.concurrency = Math.max(1, Math.min(20, Number(body.concurrency) || 2))
       if (body.serverImagePath != null) store.data.settings.serverImagePath = String(body.serverImagePath)
       if (body.activeProfile && typeof body.activeProfile === 'object') {
-        const activeProfilePatch = { ...body.activeProfile }
-        if ('apiKey' in activeProfilePatch && !String(activeProfilePatch.apiKey || '').trim()) {
-          delete activeProfilePatch.apiKey
-        }
-        delete activeProfilePatch.apiKeySet
+        const activeProfilePatch = normalizeAdminActiveProfilePatch(body.activeProfile)
         store.data.settings.activeProfile = { ...store.data.settings.activeProfile, ...activeProfilePatch }
       }
       await store.save()

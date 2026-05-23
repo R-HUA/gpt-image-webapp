@@ -35,7 +35,7 @@ export default function App() {
 
   const clearBackendRuntimeState = () => {
     setServerImageBatchMode(false)
-    setSettings({ adminServerImagePath: '', backendCodexCli: false })
+    setSettings({ adminServerImagePath: '', backendCodexCli: false, backendRuntimeProfile: null })
   }
 
   const refreshSession = () => {
@@ -50,6 +50,7 @@ export default function App() {
             .then((settingsRes) => setSettings({
               adminServerImagePath: settingsRes.settings?.serverImagePath || '',
               backendCodexCli: Boolean(settingsRes.settings?.codexCli),
+              backendRuntimeProfile: settingsRes.settings?.activeProfile || null,
             }))
             .catch(clearBackendRuntimeState)
         } else {

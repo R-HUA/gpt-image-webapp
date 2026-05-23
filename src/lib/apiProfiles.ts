@@ -3,6 +3,7 @@ import type {
   ApiProfile,
   ApiProvider,
   AppSettings,
+  BackendRuntimeProfile,
   CustomProviderContentType,
   CustomProviderDefinition,
   CustomProviderFileMapping,
@@ -24,6 +25,7 @@ export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
+export const BACKEND_RUNTIME_PROFILE_ID = '__backend_runtime__'
 
 const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
@@ -447,6 +449,24 @@ function validateImportedProfileRecord(input: unknown) {
   }
 }
 
+function normalizeBackendRuntimeProfile(input: unknown): BackendRuntimeProfile | null {
+  if (!isRecord(input)) return null
+  if (typeof input.provider !== 'string' || !input.provider.trim()) return null
+  if (typeof input.model !== 'string' || !input.model.trim()) return null
+  if (input.apiMode !== 'images' && input.apiMode !== 'responses') return null
+
+  return {
+    provider: input.provider,
+    model: input.model,
+    apiMode: input.apiMode,
+    codexCli: Boolean(input.codexCli),
+    responseFormatB64Json: input.responseFormatB64Json === true ? true : undefined,
+    timeout: typeof input.timeout === 'number' && Number.isFinite(input.timeout)
+      ? input.timeout
+      : undefined,
+  }
+}
+
 export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSettings {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
@@ -496,6 +516,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     activeProfileId,
     adminServerImagePath: typeof record.adminServerImagePath === 'string' ? record.adminServerImagePath : undefined,
     backendCodexCli: typeof record.backendCodexCli === 'boolean' ? record.backendCodexCli : false,
+    backendRuntimeProfile: normalizeBackendRuntimeProfile(record.backendRuntimeProfile),
   }
 }
 
@@ -591,6 +612,63 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : profile.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, profile.streamPartialImages),
   }
+}
+
+export function createSettingsForApiProfile(settings: Partial<AppSettings> | unknown, profile: ApiProfile): AppSettings {
+  const normalized = normalizeSettings(settings)
+  const profiles = normalized.profiles.some((item) => item.id === profile.id)
+    ? normalized.profiles.map((item) => item.id === profile.id ? profile : item)
+    : [...normalized.profiles, profile]
+
+  return normalizeSettings({
+    ...normalized,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    model: profile.model,
+    timeout: profile.timeout,
+    apiMode: profile.apiMode,
+    codexCli: profile.codexCli,
+    apiProxy: profile.apiProxy,
+    profiles,
+    activeProfileId: profile.id,
+  })
+}
+
+export function getBackendRuntimeApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile | null {
+  const normalized = normalizeSettings(settings)
+  const runtimeProfile = normalized.backendRuntimeProfile
+  if (!runtimeProfile) return null
+
+  const fallback = getActiveApiProfile(normalized)
+  return {
+    ...fallback,
+    id: BACKEND_RUNTIME_PROFILE_ID,
+    name: '后端配置',
+    provider: runtimeProfile.provider,
+    apiKey: '',
+    model: runtimeProfile.model,
+    timeout: runtimeProfile.timeout ?? fallback.timeout,
+    apiMode: runtimeProfile.apiMode,
+    codexCli: runtimeProfile.codexCli,
+    apiProxy: false,
+    responseFormatB64Json: runtimeProfile.responseFormatB64Json,
+    streamImages: false,
+  }
+}
+
+export function getGalleryApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
+  return getBackendRuntimeApiProfile(settings) ?? getActiveApiProfile(settings)
+}
+
+export function createGalleryApiSettings(settings: Partial<AppSettings> | unknown): AppSettings {
+  return createSettingsForApiProfile(settings, getGalleryApiProfile(settings))
+}
+
+export function isBackendRuntimeCodexCli(settings: Partial<AppSettings> | unknown): boolean {
+  const normalized = normalizeSettings(settings)
+  return normalized.backendRuntimeProfile
+    ? normalized.activeProfileId === BACKEND_RUNTIME_PROFILE_ID && normalized.backendRuntimeProfile.codexCli === true
+    : normalized.backendCodexCli === true
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {

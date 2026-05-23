@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
-import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
+import { BACKEND_RUNTIME_PROFILE_ID, createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
 import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 vi.mock('./lib/db', () => {
@@ -383,6 +383,77 @@ describe('mask draft lifecycle in store actions', () => {
     expect(backendJobs[0]).toMatchObject({
       batch: true,
       batchCount: 4,
+      params: expect.objectContaining({ n: 1 }),
+    })
+  })
+
+  it('uses backend runtime profile codex cli flag for no-image batch count', async () => {
+    useStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        codexCli: false,
+        backendCodexCli: false,
+        backendRuntimeProfile: {
+          provider: 'openai',
+          model: 'backend-runtime-model',
+          apiMode: 'images',
+          codexCli: true,
+        },
+      },
+      batchMode: true,
+      batchCount: 2,
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS, n: 4 },
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(4)
+    expect(state.tasks.map((item) => item.batchIndex)).toEqual([1, 2, 3, 4])
+    expect(state.tasks.every((item) => item.apiProfileId === BACKEND_RUNTIME_PROFILE_ID)).toBe(true)
+    expect(state.tasks.every((item) => item.apiModel === 'backend-runtime-model')).toBe(true)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      batchCount: 4,
+      params: expect.objectContaining({ n: 1, quality: 'auto' }),
+    })
+  })
+
+  it('prefers backend runtime profile over stale legacy backend codex cli flag', async () => {
+    useStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        codexCli: false,
+        backendCodexCli: true,
+        backendRuntimeProfile: {
+          provider: 'openai',
+          model: 'backend-runtime-model',
+          apiMode: 'images',
+          codexCli: false,
+        },
+      },
+      batchMode: true,
+      batchCount: 2,
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS, n: 4 },
+    })
+
+    await submitTask()
+    await flushAsyncTasks()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((item) => item.batchIndex)).toEqual([1, 2])
+    expect(state.tasks.every((item) => item.apiProfileId === BACKEND_RUNTIME_PROFILE_ID)).toBe(true)
+    expect(backendJobs).toHaveLength(1)
+    expect(backendJobs[0]).toMatchObject({
+      batch: true,
+      batchCount: 2,
       params: expect.objectContaining({ n: 1 }),
     })
   })

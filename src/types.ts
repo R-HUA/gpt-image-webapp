@@ -99,6 +99,16 @@ export interface AppSettings {
   activeProfileId: string
   adminServerImagePath?: string
   backendCodexCli?: boolean
+  backendRuntimeProfile?: BackendRuntimeProfile | null
+}
+
+export interface BackendRuntimeProfile {
+  provider: ApiProvider
+  model: string
+  apiMode: ApiMode
+  codexCli: boolean
+  responseFormatB64Json?: boolean
+  timeout?: number
 }
 
 // ===== 任务参数 =====

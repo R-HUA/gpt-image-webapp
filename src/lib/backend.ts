@@ -1,4 +1,4 @@
-import type { BackendJobProgress, TaskParams } from '../types'
+import type { BackendJobProgress, BackendRuntimeProfile, TaskParams } from '../types'
 
 export interface BackendUser {
   username: string
@@ -8,6 +8,7 @@ export interface BackendUser {
 export interface BackendRuntimeSettings {
   codexCli: boolean
   serverImagePath?: string
+  activeProfile?: BackendRuntimeProfile | null
 }
 
 export interface BackendJob {

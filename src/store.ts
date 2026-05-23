@@ -18,7 +18,7 @@ import type {
   ResponsesOutputItem,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { BACKEND_RUNTIME_PROFILE_ID, DEFAULT_SETTINGS, createSettingsForApiProfile, getActiveApiProfile, getBackendRuntimeApiProfile, getCustomProviderDefinition, getGalleryApiProfile, isBackendRuntimeCodexCli, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -609,7 +609,7 @@ function getLatestAgentConversation(conversations: AgentConversation[]) {
 
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
-  const { backendCodexCli: _backendCodexCli, ...persistedSettings } = settings
+  const { backendCodexCli: _backendCodexCli, backendRuntimeProfile: _backendRuntimeProfile, ...persistedSettings } = settings
   const galleryInputDraft = getPersistableGalleryInputDraft(state)
   return {
     settings: persistedSettings,
@@ -1799,30 +1799,19 @@ export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiP
   const provider = task.apiProvider
 
   if (!task.apiProfileId) return null
+  if (task.apiProfileId === BACKEND_RUNTIME_PROFILE_ID) {
+    const backendProfile = getBackendRuntimeApiProfile(normalized)
+    if (backendProfile && (!provider || backendProfile.provider === provider)) return backendProfile
+  }
 
   const byId = normalized.profiles.find((profile) => profile.id === task.apiProfileId)
   if (byId && (!provider || byId.provider === provider)) return byId
   return null
 }
 
-function createSettingsForApiProfile(settings: AppSettings, profile: ApiProfile): AppSettings {
-  const normalized = normalizeSettings(settings)
-  return normalizeSettings({
-    ...normalized,
-    baseUrl: profile.baseUrl,
-    apiKey: profile.apiKey,
-    model: profile.model,
-    timeout: profile.timeout,
-    apiMode: profile.apiMode,
-    codexCli: profile.codexCli,
-    apiProxy: profile.apiProxy,
-    profiles: normalized.profiles.map((item) => item.id === profile.id ? profile : item),
-    activeProfileId: profile.id,
-  })
-}
-
 function getReusedTaskApiProfile(settings: AppSettings, profileId: string | null): ApiProfile | null {
   if (!profileId) return null
+  if (profileId === BACKEND_RUNTIME_PROFILE_ID) return getBackendRuntimeApiProfile(settings)
   return normalizeSettings(settings).profiles.find((profile) => profile.id === profileId) ?? null
 }
 
@@ -2247,9 +2236,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
-  let activeProfile = getActiveApiProfile(settings)
+  const backendProfile = getBackendRuntimeApiProfile(normalizedSettings)
+  let activeProfile = backendProfile ?? getActiveApiProfile(settings)
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
-  if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
+  if (!backendProfile && normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
     if (!reusedProfile) {
       if (options.useCurrentApiProfileWhenReusedMissing) {
@@ -2328,7 +2318,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 || serverImageBatchMode })
-  const codexCliActive = settings.backendCodexCli === true
+  const codexCliActive = isBackendRuntimeCodexCli(requestSettings)
   const isCodexCliBatch = batchMode && !serverImageBatchMode && orderedInputImages.length === 0 && codexCliActive
   const submittedParams = (batchMode || serverImageBatchMode)
     ? { ...normalizedParams, n: 1 }
@@ -4493,8 +4483,10 @@ export async function retryTask(task: TaskRecord) {
   }
 
   const { settings } = useStore.getState()
-  const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const normalizedSettings = normalizeSettings(settings)
+  const activeProfile = getGalleryApiProfile(normalizedSettings)
+  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const normalizedParams = normalizeParamsForSettings(task.params, requestSettings, { hasInputImages: task.inputImageIds.length > 0 })
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,
@@ -4535,8 +4527,10 @@ export async function retryTask(task: TaskRecord) {
 /** 重试批次内单个失败任务：创建新任务，隐藏原任务（可展开查看） */
 export async function retryBatchItem(task: TaskRecord) {
   const { settings } = useStore.getState()
-  const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const normalizedSettings = normalizeSettings(settings)
+  const activeProfile = getGalleryApiProfile(normalizedSettings)
+  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const normalizedParams = normalizeParamsForSettings(task.params, requestSettings, { hasInputImages: task.inputImageIds.length > 0 })
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,

@@ -3,3 +3,4 @@ dist/
 server-data/
 dev-proxy.config.json
 .wrangler/
+doc/

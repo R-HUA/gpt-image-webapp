@@ -45,6 +45,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
     useStore.getState().setSettings({
       adminServerImagePath: settingsRes.settings?.serverImagePath || '',
       backendCodexCli: Boolean(settingsRes.settings?.activeProfile?.codexCli),
+      backendRuntimeProfile: settingsRes.settings?.activeProfile || null,
     })
     setKeys(keysRes.keys)
     setLogs(logRes.logs)
@@ -79,6 +80,7 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
       useStore.getState().setSettings({
         adminServerImagePath: res.settings?.serverImagePath || '',
         backendCodexCli: Boolean(res.settings?.activeProfile?.codexCli),
+        backendRuntimeProfile: res.settings?.activeProfile || null,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -184,10 +186,12 @@ export default function AdminPanel({ user }: { user: BackendUser | null }) {
               <label className="block text-xs text-gray-500">服务器图片目录</label>
               <input value={settings.serverImagePath || ''} onChange={(e) => setSettings({ ...settings, serverImagePath: e.target.value })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">服务商类型</label>
-              <select value={settings.activeProfile.provider || 'openai'} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, provider: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <option value="openai">OpenAI 兼容接口</option>
-                <option value="fal">fal.ai</option>
-              </select>
+              <div className="rounded-lg border px-3 py-2 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300">
+                OpenAI 兼容接口
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                后端统一执行模式当前只支持 OpenAI 兼容 Images/Responses 接口；fal.ai 仍可在普通 API 配置中作为前端直连服务商使用。
+              </p>
               <label className="block text-xs text-gray-500">上游服务商 Base URL</label>
               <input value={settings.activeProfile.baseUrl || ''} onChange={(e) => setSettings({ ...settings, activeProfile: { ...settings.activeProfile, baseUrl: e.target.value } })} className="w-full rounded-lg border px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
               <label className="block text-xs text-gray-500">上游服务商密钥</label>

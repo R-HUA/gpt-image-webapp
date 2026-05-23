@@ -5,15 +5,56 @@ import {
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_SETTINGS,
+  BACKEND_RUNTIME_PROFILE_ID,
+  createSettingsForApiProfile,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
   findEquivalentApiProfile,
+  getBackendRuntimeApiProfile,
+  isBackendRuntimeCodexCli,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
   normalizeSettings,
   switchApiProfileProvider,
 } from './apiProfiles'
+
+describe('backend runtime profiles', () => {
+  it('creates a transient active profile from backend runtime settings', () => {
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      backendCodexCli: true,
+      backendRuntimeProfile: {
+        provider: 'openai',
+        model: 'backend-model',
+        apiMode: 'responses',
+        codexCli: false,
+        responseFormatB64Json: true,
+        timeout: 120,
+      },
+    })
+
+    const profile = getBackendRuntimeApiProfile(settings)
+    expect(profile).toMatchObject({
+      id: BACKEND_RUNTIME_PROFILE_ID,
+      name: '后端配置',
+      provider: 'openai',
+      apiKey: '',
+      model: 'backend-model',
+      apiMode: 'responses',
+      codexCli: false,
+      apiProxy: false,
+      responseFormatB64Json: true,
+      timeout: 120,
+    })
+    expect(isBackendRuntimeCodexCli(settings)).toBe(false)
+
+    const requestSettings = createSettingsForApiProfile(settings, profile!)
+    expect(requestSettings.activeProfileId).toBe(BACKEND_RUNTIME_PROFILE_ID)
+    expect(requestSettings.profiles.some((item) => item.id === BACKEND_RUNTIME_PROFILE_ID)).toBe(true)
+    expect(isBackendRuntimeCodexCli(requestSettings)).toBe(false)
+  })
+})
 
 describe('mergeImportedSettings', () => {
   it('replaces the default OpenAI profile with legacy imported settings when current settings are untouched', () => {
